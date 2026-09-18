@@ -1,0 +1,104 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
+const ENV_FILE = path.join(ROOT, '.env');
+
+function loadDotenv() {
+  if (!fs.existsSync(ENV_FILE)) return;
+  const txt = fs.readFileSync(ENV_FILE, 'utf8');
+  for (const line of txt.split(/\r?\n/)) {
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const k = line.slice(0, eq).trim();
+    let v = line.slice(eq + 1).trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    }
+    if (!(k in process.env)) process.env[k] = v;
+  }
+}
+loadDotenv();
+
+function bool(v, dflt = false) {
+  if (v == null) return dflt;
+  return /^(1|true|yes|on)$/i.test(String(v));
+}
+
+function int(v, dflt) {
+  const n = parseInt(String(v ?? ''), 10);
+  return Number.isFinite(n) ? n : dflt;
+}
+
+function csv(v) {
+  if (!v) return [];
+  return String(v).split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+export const config = {
+  root: ROOT,
+  envFile: ENV_FILE,
+  dbPath: process.env.DB_PATH || path.join(ROOT, 'data', 'gateway.db'),
+  log: {
+    level: process.env.LOG_LEVEL || 'info',
+    format: process.env.LOG_FORMAT || 'pretty',
+    file: process.env.LOG_FILE || null,
+  },
+  http: {
+    timeoutMs: int(process.env.REQUEST_TIMEOUT_MS, 120_000),
+  },
+  telegram: {
+    token: process.env.TELEGRAM_BOT_TOKEN || '',
+    allowed: csv(process.env.TELEGRAM_ALLOWED_USERS),
+    admins: csv(process.env.TELEGRAM_ADMIN_USERS),
+    homeChannel: process.env.TELEGRAM_HOME_CHANNEL || null,
+  },
+  defaults: {
+    provider: process.env.DEFAULT_PROVIDER || 'openai',
+    model: process.env.DEFAULT_MODEL || 'gpt-4o-mini',
+    temperature: Number(process.env.DEFAULT_TEMPERATURE ?? 0.7),
+    maxTokens: int(process.env.DEFAULT_MAX_TOKENS, 4096),
+    systemPrompt: process.env.SYSTEM_PROMPT || 'You are a helpful assistant.',
+  },
+  vision: {
+    provider: process.env.VISION_PROVIDER || '',
+    model: process.env.VISION_MODEL || '',
+  },
+  historyLimit: int(process.env.HISTORY_LIMIT, 20),
+  maxInputChars: int(process.env.MAX_INPUT_CHARS, 8000),
+  streaming: bool(process.env.STREAMING, true),
+  proxy: {
+    enabled: bool(process.env.PROXY_ENABLED, true),
+    target: int(process.env.PROXY_TARGET, 10000),
+    rotatePerChat: bool(process.env.PROXY_PER_CHAT, true),
+    refreshHours: int(process.env.PROXY_REFRESH_HOURS, 6),
+  },
+  admin: {
+    requireChannel: bool(process.env.ADMIN_REQUIRE_CHANNEL, true),
+    channelId: process.env.TELEGRAM_HOME_CHANNEL || '',
+  },
+  export: {
+    homeChannel: process.env.TELEGRAM_HOME_CHANNEL || '',
+  },
+};
+
+export function isAdmin(userId) {
+  return config.telegram.admins.includes(String(userId));
+}
+export function isAllowed(userId) {
+  return config.telegram.allowed.length === 0 || config.telegram.allowed.includes(String(userId));
+}
+export function isAdminChannel(chatId) {
+  if (!config.admin.requireChannel) return true;
+  if (!config.admin.channelId) return true;
+  return String(chatId) === String(config.admin.channelId);
+}
+
+export function assertValid() {
+  const errs = [];
+  if (!config.telegram.token) errs.push('TELEGRAM_BOT_TOKEN is empty in .env');
+  return errs;
+}
