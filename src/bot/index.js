@@ -11,10 +11,14 @@ import { sessionsCommand } from './commands/sessions.js';
 import {
   agentCommand, abortCommand, toolsCommand, approvalCallback,
 } from './commands/agent.js';
+import { debugCommand, pluginsCommand } from './commands/debug.js';
+import { pluginsLoader } from '../plugins/state.js';
 import { browserSafe } from '../browser/tool.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
 import { sweepDead } from '../proxy/pool.js';
+import { rateLimitMiddleware } from './middleware/rate-limit.js';
+import { PluginLoader } from '../plugins/loader.js';
 
 let proxyTimer = null;
 async function startProxyMaintenance() {
@@ -44,6 +48,10 @@ export function createBot() {
   const bot = new Bot(config.telegram.token);
   bot.use(session({ initial: () => ({}) }));
   bot.use(authMiddleware);
+  bot.use(rateLimitMiddleware({
+    maxPerMinute: config.agent.rateLimitPerMinute,
+    windowMs: 60_000,
+  }));
 
   // Commands
   bot.command('start', startCommand);
@@ -62,6 +70,8 @@ export function createBot() {
   bot.command('agent', agentCommand);
   bot.command('abort', abortCommand);
   bot.command('tools', toolsCommand);
+  bot.command('debug', debugCommand);
+  bot.command('plugins', pluginsCommand);
   bot.callbackQuery(/^approve:/, approvalCallback);
   bot.callbackQuery(/^deny:/, approvalCallback);
 
@@ -95,6 +105,13 @@ export async function run() {
   const bot = createBot();
   await bot.api.deleteWebhook({ drop_pending_updates: true });
   await startProxyMaintenance();
+
+  const plugins = new PluginLoader({ dir: config.plugins.dir, enabled: config.plugins.enabled });
+  await plugins.loadAll();
+  await plugins.attachMiddleware(bot);
+  plugins.bot = bot;
+  setPluginsLoader(plugins);
+
   logger.info({
     admins: config.telegram.admins,
     allowed: config.telegram.allowed.length,
@@ -102,11 +119,17 @@ export async function run() {
     admin_channel: config.admin.channelId || '(any)',
     agent_enabled: config.agent.enabled,
     workspace: config.agent.workspace,
+    plugins: plugins.loaded.map((p) => p.name),
   }, 'starting bot');
   if (config.agent.enabled) {
     const fs = await import('node:fs');
     fs.mkdirSync(config.agent.workspace, { recursive: true });
   }
+  // plugin hooks fire after auth + rate limit, before command routing
+  bot.use(async (ctx, next) => {
+    if (ctx.has?.('message')) await plugins.emitMessage(ctx);
+    return next();
+  });
   // bot.start() rejects on 401/409 — without await+catch it becomes an
   // unhandledRejection and the process lingers as a zombie with dead polling.
   bot

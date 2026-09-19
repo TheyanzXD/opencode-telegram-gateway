@@ -6,6 +6,7 @@
 import { bashTool } from './tools/bash.js';
 import { fsTools } from './tools/fs.js';
 import { searchTools } from './tools/search.js';
+import { sysinfoTool } from './tools/sysinfo.js';
 
 export class ToolRegistry {
   constructor(tools = []) {
@@ -39,6 +40,10 @@ export class ToolRegistry {
   validate(name, args) {
     const tool = this.get(name);
     if (!tool) return { ok: false, error: `unknown tool: ${name}` };
+    // plugins may omit zod — fall back to a permissive check
+    if (!tool.schema || !tool.schema.safeParse) {
+      return { ok: true, data: args ?? {} };
+    }
     const r = tool.schema.safeParse(args ?? {});
     if (!r.success) {
       return { ok: false, error: r.error.issues.map((i) => `${(i.path || []).join('.') || 'root'}: ${i.message}`).join('; ') };
@@ -60,5 +65,5 @@ export class ToolRegistry {
 }
 
 export function createDefaultRegistry() {
-  return new ToolRegistry([bashTool, ...fsTools, ...searchTools]);
+  return new ToolRegistry([bashTool, ...fsTools, ...searchTools, sysinfoTool]);
 }

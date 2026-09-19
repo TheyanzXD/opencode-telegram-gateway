@@ -18,14 +18,14 @@
     "interactive": "node bin/opencode-gateway.js tui",
     "test": "node --test tests/",
     "lint": "node scripts/lint.js",
-    "format": "prettier --write ."
-  },
-  "engines": {
-    "node": ">=18.17.0"
+    "format": "prettier --write .",
+    "install-gateway": "node scripts/install.js",
+    "update-gateway": "node scripts/update.js"
   },
   "dependencies": {
     "archiver": "^7.0.1",
     "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.0.0",
     "dotenv": "^16.4.7",
     "grammy": "^1.36.3",
     "pino": "^9.5.0",
@@ -39,6 +39,9 @@
   },
   "devDependencies": {
     "prettier": "^3.4.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "keywords": [
     "telegram",

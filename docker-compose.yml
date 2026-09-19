@@ -1,0 +1,20 @@
+# language: YAML
+# One container, long-polling. No ports to publish — grammY does not listen.
+# Mount data/ and workspace/ so history and agent files survive restarts.
+
+services:
+  gateway:
+    build: .
+    image: opencode-gateway:latest
+    container_name: opencode-gateway
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/app/workspace
+      - ./providers.yaml:/app/providers.yaml:ro
+    # keep it modest; a single bot + sqlite needs little
+    mem_limit: 512m
+    cpus: 1.0
+    # Chromium for /browse is large; opt in by mounting the host cache:
+    #   - ~/.cache/ms-playwright:/home/gateway/.cache/ms-playwright

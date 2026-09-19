@@ -10,9 +10,12 @@ import { requestJson } from '../providers/client.js';
 import { getProvider } from '../providers/store.js';
 import { createDefaultRegistry } from './registry.js';
 import { createApproval } from './approvals.js';
+import { analyze } from '../debugger/error-analyzer.js';
+import { Tracer } from '../debugger/tracer.js';
 import { logger } from '../logger.js';
 
 const MAX_TURN_CHARS = 6000; // a tool result is capped before going back into context
+const RETRYABLE_MAX = 2;     // provider failures retried per turn before surfacing
 
 export class AgentEngine {
   /**
@@ -38,6 +41,7 @@ export class AgentEngine {
     this.onEvent = opts.onEvent ?? (() => {});
     this.requestFn = opts.requestFn ?? ((body, signal, chatId) =>
       requestJson(this.provider, '/chat/completions', body, signal, chatId));
+    this.tracer = new Tracer();
   }
 
   async run({ messages, chatId, userId, signal }) {
@@ -47,10 +51,15 @@ export class AgentEngine {
     const convo = [...messages]; // mutated as tools append results
 
     for (;;) {
-      if (signal?.aborted) throw new Error('aborted by user');
+      if (signal?.aborted) {
+        this.tracer.error(new Error('aborted by user'), { kind: 'abort' });
+        throw new Error('aborted by user');
+      }
       if (++turns > this.maxTurns) {
-        this.onEvent({ type: 'error', message: `max turns (${this.maxTurns}) reached` });
-        throw new Error(`max turns (${this.maxTurns}) reached`);
+        const e = new Error(`max turns (${this.maxTurns}) reached`);
+        this.tracer.error(e, { kind: 'unknown' });
+        this.onEvent({ type: 'error', message: e.message });
+        throw e;
       }
 
       const body = {
@@ -63,19 +72,50 @@ export class AgentEngine {
       };
 
       // Non-streaming request: we need the full message back to read tool_calls.
-      const data = await this.requestFn(body, signal, chatId);
+      // Retryable provider failures (network/timeout/5xx/429) are retried here so
+      // a flaky proxy cannot kill a long task; the trace keeps the attempt count.
+      let data;
+      for (let attempt = 0; ; attempt++) {
+        const t0 = Date.now();
+        try {
+          data = await this.requestFn(body, signal, chatId);
+          this.tracer.providerCall(this.model, Date.now() - t0, true);
+          break;
+        } catch (err) {
+          const diag = analyze(err, { attempt });
+          this.tracer.providerCall(this.model, Date.now() - t0, false);
+          this.tracer.error(err, diag);
+          if (signal?.aborted) throw new Error('aborted by user');
+          if (diag.retryable && attempt < RETRYABLE_MAX) {
+            // 429 honors Retry-After when the provider sends one; others back off linearly
+            const after = extractRetryAfter(err);
+            const wait = after ?? 800 * (attempt + 1);
+            await new Promise((r) => setTimeout(r, Math.min(wait, 20_000)));
+            logger.warn({ kind: diag.kind, attempt, wait }, 'provider retry');
+            continue;
+          }
+          this.onEvent({ type: 'error', message: diag.message });
+          throw err;
+        }
+      }
       const msg = data.choices?.[0]?.message;
 
-      if (!msg) throw new Error('provider returned no message');
+      if (!msg) {
+        const e = new Error('provider returned no message');
+        this.tracer.error(e, analyze(e));
+        throw e;
+      }
 
       // 1. Visible assistant text — emit as tokens (one chunk, not char-by-char).
       if (msg.content) {
         this.onEvent({ type: 'token', text: msg.content });
+        this.tracer.tokens(data.usage?.completion_tokens ?? 0);
       }
 
       // 2. No tool call → the answer is done.
       if (!msg.tool_calls?.length) {
         this.onEvent({ type: 'done', usage: data.usage, turns });
+        this.tracer.close();
         return msg.content || '';
       }
 
@@ -97,19 +137,24 @@ export class AgentEngine {
         if (tool?.isDangerous) {
           const { id, promise } = createApproval(userId, name, args);
           this.onEvent({ type: 'approvalRequired', id, tool: name, args });
+          const t0 = Date.now();
           const approved = await promise;
+          this.tracer.approval(name, approved, Date.now() - t0);
           if (!approved) {
             const out = '⛔ denied by user';
             this.onEvent({ type: 'toolEnd', tool: name, output: out, denied: true });
+            this.tracer.toolCall(name, 0, false, out);
             convo.push(this.toolResult(call.id, name, out));
             continue;
           }
         }
 
         this.onEvent({ type: 'toolStart', tool: name, args });
+        const t0 = Date.now();
         const result = await this.registry.execute(name, args);
         const output = String(result.content).slice(0, MAX_TURN_CHARS);
         this.onEvent({ type: 'toolEnd', tool: name, output, isError: result.isError });
+        this.tracer.toolCall(name, Date.now() - t0, !result.isError, output);
 
         convo.push(this.toolResult(call.id, name, output));
       }
@@ -120,4 +165,13 @@ export class AgentEngine {
   toolResult(toolCallId, name, content) {
     return { role: 'tool', tool_call_id: toolCallId, name, content };
   }
+}
+
+/** Pull a Retry-After value (seconds) out of a 429 if the provider sent one. */
+function extractRetryAfter(err) {
+  const headers = err?.headers;
+  if (!headers) return null;
+  const v = headers.get?.('retry-after') || headers['retry-after'] || headers['Retry-After'];
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n * 1000 : null;
 }

@@ -1,7 +1,10 @@
 // language: JavaScript (Node 18+ ESM), file: src/agent/tools/search.js
 // Tools: web_search (DuckDuckGo HTML — no key, no rate limit under personal use)
-// and fetch_url (raw markdown-ish text). Not dangerous — read-only network.
+// and fetch_url (raw text). Not dangerous — read-only network.
+// HTML is parsed with cheerio, not regex: the previous regex walk broke the
+// moment DDG changed a class name or an attribute order.
 
+import { load } from 'cheerio';
 import { z } from 'zod';
 import { logger } from '../../logger.js';
 
@@ -51,18 +54,20 @@ export const searchTools = [
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       logger.info({ q: query.slice(0, 80) }, 'web_search');
       const html = await fetchText(url, AbortSignal.timeout(20_000));
+
+      const $ = load(html);
       const results = [];
-      const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-      let m;
-      while ((m = re.exec(html)) && results.length < n) {
-        let link = m[1];
+      $('a.result__a').each((_, el) => {
+        if (results.length >= n) return false;
+        const $el = $(el);
+        let link = $el.attr('href') || '';
         // DDG redirects through a jump endpoint
         const jump = /uddg=([^&]+)/.exec(link);
         if (jump) link = decodeURIComponent(jump[1]);
-        const title = m[2].replace(/<[^>]+>/g, '').trim();
-        const snippet = m[3].replace(/<[^>]+>/g, '').trim();
+        const title = $el.text().trim();
+        const snippet = $el.closest('.result').find('.result__snippet').text().trim();
         results.push(`${title}\n${link}\n${snippet}`);
-      }
+      });
       return results.length ? results.join('\n\n') : `no results for "${query}"`;
     },
   },

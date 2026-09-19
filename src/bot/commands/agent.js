@@ -13,7 +13,9 @@ import { logger } from '../../logger.js';
 import { AgentEngine } from '../../agent/engine.js';
 import { TelegramPresenter } from '../../agent/presenter.js';
 import { createDefaultRegistry } from '../../agent/registry.js';
+import { pluginsLoader } from '../../plugins/state.js';
 import { resolveApproval, rejectAllForUser } from '../../agent/approvals.js';
+import { rememberTrace } from './debug.js';
 
 /** In-flight runs keyed by chat id. */
 const runs = new Map();
@@ -94,7 +96,12 @@ async function runAgent(ctx, prompt) {
     },
   });
 
+  // plugin tools ride alongside the built-ins
+  const loader = pluginsLoader();
+  if (loader) for (const tool of loader.tools()) engine.registry.register(tool);
+
   runs.set(key, { engine, abortCtl, presenter });
+  rememberTrace(ctx.chat.id, engine.tracer);
 
   try {
     await presenter.init('🧠 thinking…');

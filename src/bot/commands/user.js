@@ -38,6 +38,8 @@ export async function helpCommand(ctx) {
 /agent <task> — tool-calling agent: shell, files, web search (approvals for destructive tools)
 /abort — cancel the running /agent in this chat
 /tools — list the agent's tools
+/debug — last agent run trace for this chat (provider calls, tools, approvals)
+/plugins — loaded plugins + failures
 /about — version, capabilities, config paths`,
     { parse_mode: 'Markdown' }
   );

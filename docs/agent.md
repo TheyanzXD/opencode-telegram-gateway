@@ -4,6 +4,12 @@
 model can call tools (shell, filesystem, web search) in a loop, and anything
 destructive pauses for a Telegram approval before it runs.
 
+Every run is traced: provider calls, tool calls, approvals, and errors land in a
+timeline readable with `/debug`. Provider failures are classified — network,
+timeout, auth, rate limit, missing module — and the retryable ones are retried
+in-place (up to 2 per turn, honoring `Retry-After` on a 429) so a flaky proxy
+cannot kill a long task.
+
 ## Enable
 
 ```bash
