@@ -2,6 +2,8 @@ node_modules/
 .env
 data/
 *.log
+premium-proxy-list.txt
+proxy-premium*.txt
 .DS_Store
 dist/
 coverage/

@@ -1,5 +1,6 @@
-import { allModels, providerNames, modelList, getProvider } from '../../providers/store.js';
+import { allModels, providerNames, modelList, getProvider, addModel } from '../../providers/store.js';
 import { getUser, setUserModel, setUserTemperature, setUserSystemPrompt, clearHistory, getHistory, getActiveSession } from '../../db.js';
+import { listModels } from '../../providers/client.js';
 import { config } from '../../config.js';
 
 export async function startCommand(ctx) {
@@ -35,23 +36,73 @@ export async function helpCommand(ctx) {
 }
 
 export async function modelCommand(ctx) {
-  const arg = ctx.match?.trim();
+  const arg = (ctx.match || '').trim();
+  const [sub, ...rest] = arg.split(/\s+/);
+
+  // /model add <provider>/<modelid> [context] [vision]
+  if (sub === 'add') return modelAdd(ctx, rest.join(' '));
+  // /model list <provider> — live /models from the provider itself
+  if (sub === 'list') return modelListLive(ctx, rest[0]);
+
   if (!arg) {
     const u = getUser(ctx.from.id);
     return ctx.reply(
 `Current: \`${u?.provider}/${u?.model}\`
-Usage: \`/model <provider>/<model>\`\n\nProviders: ${providerNames().join(', ')}`,
+Usage: \`/model <provider>/<model>\`
+
+Also:
+• \`/model list <provider>\` — fetch the provider's live model list
+• \`/model add <provider>/<modelid> [context] [vision]\` — admin: register a model`,
       { parse_mode: 'Markdown' }
     );
   }
-  const [provider, ...rest] = arg.split('/');
-  const model = rest.join('/');
+  const [provider, ...r] = arg.split('/');
+  const model = r.join('/');
   if (!provider || !model) return ctx.reply('Format: /model <provider>/<model>');
   if (!getProvider(provider)) return ctx.reply(`Unknown provider: ${provider}`);
   if (!modelList(provider).find((m) => m.id === model))
-    return ctx.reply(`Unknown model ${model} for provider ${provider}`);
+    return ctx.reply(`Unknown model ${model} for provider ${provider}. Try \`/model list ${provider}\` to see what the provider offers.`);
   setUserModel(ctx.from.id, provider, model);
   await ctx.reply(`✅ Switched to \`${provider}/${model}\``, { parse_mode: 'Markdown' });
+}
+
+async function modelListLive(ctx, providerName) {
+  if (!providerName) {
+    return ctx.reply('Usage: `/model list <provider>`\nKnown providers: ' + providerNames().join(', '), { parse_mode: 'Markdown' });
+  }
+  if (!getProvider(providerName)) return ctx.reply(`Unknown provider: ${providerName}`);
+  const wait = await ctx.reply(`⏳ Fetching models from ${providerName}…`);
+  try {
+    const ids = await listModels(providerName, ctx.chat.id);
+    if (!ids.length) return ctx.api.editMessageText(ctx.chat.id, wait.message_id, `${providerName} returned no models.`);
+    // 4096-char Telegram limit: page through
+    const known = new Set(modelList(providerName).map((m) => m.id));
+    const lines = ids.slice(0, 400).map((id) => `${known.has(id) ? '✅' : '⬜'} \`${id}\`${known.has(id) ? '' : '  (not registered — use /model add)'}`);
+    const header = `*${providerName}* — ${ids.length} model(s):\n\n`;
+    for (let i = 0; i < lines.length; i += 90) {
+      const chunk = (i === 0 ? header : '') + lines.slice(i, i + 90).join('\n');
+      const target = i === 0 ? wait.message_id : undefined;
+      if (target) await ctx.api.editMessageText(ctx.chat.id, target, chunk.slice(0, 4000), { parse_mode: 'Markdown' }).catch(() => {});
+      else await ctx.reply(chunk.slice(0, 4000), { parse_mode: 'Markdown' }).catch(() => {});
+    }
+  } catch (err) {
+    await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `❌ ${err.message}`.slice(0, 4000)).catch(() => {});
+  }
+}
+
+async function modelAdd(ctx, raw) {
+  if (!ctx.session?.isAdmin) return ctx.reply('🚫 Admin only.');
+  const [spec, contextStr, visionStr] = raw.split(/\s+/);
+  if (!spec || !spec.includes('/')) return ctx.reply('Usage: `/model add <provider>/<modelid> [context] [vision]`', { parse_mode: 'Markdown' });
+  const [provider, ...r] = spec.split('/');
+  const modelId = r.join('/');
+  if (!getProvider(provider)) return ctx.reply(`Unknown provider: ${provider}. Add it to providers.yaml first.`);
+  try {
+    addModel(provider, modelId, { context: contextStr, vision: visionStr });
+    await ctx.reply(`✅ Registered \`${provider}/${modelId}\`\nNow switch with: \`/model ${provider}/${modelId}\``, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply(`❌ ${err.message}`);
+  }
 }
 
 export async function modelsCommand(ctx) {

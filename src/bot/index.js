@@ -20,7 +20,7 @@ async function startProxyMaintenance() {
   const s = proxyStats();
   if (s.total < 100) {
     try {
-      await proxyRefresh({ target: config.proxy.target });
+      await proxyRefresh({ target: config.proxy.target, premiumFile: config.proxy.premiumFile || undefined });
     } catch (err) {
       logger.warn({ err: err.message }, 'initial proxy refresh failed');
     }
@@ -30,7 +30,7 @@ async function startProxyMaintenance() {
   const periodMs = Math.max(1, config.proxy.refreshHours) * 3600 * 1000;
   proxyTimer = setInterval(async () => {
     try {
-      await proxyRefresh({ target: config.proxy.target });
+      await proxyRefresh({ target: config.proxy.target, premiumFile: config.proxy.premiumFile || undefined });
     } catch (err) { logger.warn({ err: err.message }, 'scheduled proxy refresh failed'); }
     try { await sweepDead({}); } catch (err) { logger.warn({ err: err.message }, 'proxy sweep failed'); }
   }, periodMs);

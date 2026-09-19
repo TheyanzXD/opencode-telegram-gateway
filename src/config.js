@@ -72,9 +72,11 @@ export const config = {
   streaming: bool(process.env.STREAMING, true),
   proxy: {
     enabled: bool(process.env.PROXY_ENABLED, true),
-    target: int(process.env.PROXY_TARGET, 10000),
+    target: int(process.env.PROXY_TARGET, 10_000),
     rotatePerChat: bool(process.env.PROXY_PER_CHAT, true),
     refreshHours: int(process.env.PROXY_REFRESH_HOURS, 6),
+    // optional local file of authenticated proxies (user:pass@ip:port)
+    premiumFile: process.env.PROXY_PREMIUM_FILE || '',
   },
   admin: {
     requireChannel: bool(process.env.ADMIN_REQUIRE_CHANNEL, true),

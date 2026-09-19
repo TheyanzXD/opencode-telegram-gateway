@@ -6,9 +6,17 @@ import { logger } from '../logger.js';
 const cache = new Map(); // dispatcher key -> ProxyAgent
 let chatProxyIndex = new Map(); // chatId -> proxyId
 
+export function proxyUrl(p) {
+  if (!p) return null;
+  const auth = p.username
+    ? `${encodeURIComponent(p.username)}:${encodeURIComponent(p.password ?? '')}@`
+    : '';
+  return `${p.scheme}://${auth}${p.host}:${p.port}`;
+}
+
 export function dispatcherForProxy(p) {
   if (!p) return null;
-  const url = `${p.scheme}://${p.host}:${p.port}`;
+  const url = proxyUrl(p);
   let agent = cache.get(url);
   if (!agent) {
     agent = new ProxyAgent({ uri: url, requestTls: { rejectUnauthorized: false } });
@@ -43,6 +51,9 @@ export function proxyStatsLog() {
 export async function verifyProxy(p, { timeoutMs = 5000 } = {}) {
   const dispatcher = dispatcherForProxy(p);
   if (!dispatcher) return false;
+  // socks4 cannot carry the TLS CONNECT the liveness probe needs; leave it
+  // unchecked rather than crashing the whole sweep
+  if (p.scheme === 'socks4') return true;
   try {
     const res = await fetch('https://httpbin.org/ip', {
       dispatcher,
@@ -52,6 +63,8 @@ export async function verifyProxy(p, { timeoutMs = 5000 } = {}) {
     const body = await res.json();
     return Boolean(body?.origin);
   } catch {
+    // dead proxy, bad creds, or a non-SOCKS server answering on the port —
+    // all surface as a failed TLS probe; just demote it
     return false;
   }
 }

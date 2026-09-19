@@ -18,6 +18,19 @@ export function parseLine(line, defaultScheme = 'http') {
   return { scheme: scheme || defaultScheme, host, port };
 }
 
+// Premium/authenticated format: user:pass@ip:port
+const AUTH_REGEX = /^\s*([^\s:]+):([^\s@]+)@([0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9a-fA-F:]+\]):(\d{1,5})\s*$/;
+
+export function parseAuthLine(line, defaultScheme = 'socks5') {
+  const m = AUTH_REGEX.exec(line);
+  if (!m) return null;
+  const host = m[3].replace(/^\[|\]$/g, '');
+  const port = parseInt(m[4], 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) return null;
+  if (host === '127.0.0.1' || host === '::1') return null;
+  return { scheme: defaultScheme, host, port, username: m[1], password: m[2] };
+}
+
 async function fetchSource(url, scheme) {
   try {
     const res = await fetch(url, {
@@ -41,7 +54,27 @@ async function fetchSource(url, scheme) {
   }
 }
 
-export async function refresh({ perScheme = PROXY_SOURCES, parallel = 8, target = 10_000 } = {}) {
+export async function loadPremiumFile(file, scheme = 'socks5') {
+  // Reads an authenticated proxy list (user:pass@ip:port, one per line).
+  // Lines may be CRLF and may occasionally be run together; split on the
+  // user marker so nothing is lost.
+  try {
+    const text = await (await import('node:fs/promises')).readFile(file, 'utf8');
+    const fixed = text.replace(/(\d)(?=[A-Za-z0-9]{12}:)/g, '$1\n');
+    const out = [];
+    for (const line of fixed.split(/\r?\n/)) {
+      const p = parseAuthLine(line, scheme);
+      if (p) out.push({ ...p, source: file });
+    }
+    logger.info({ file, count: out.length }, 'premium proxy file loaded');
+    return out;
+  } catch (err) {
+    logger.warn({ file, err: err.message }, 'premium proxy file failed');
+    return [];
+  }
+}
+
+export async function refresh({ perScheme = PROXY_SOURCES, parallel = 8, target = 10_000, premiumFile } = {}) {
   const startedAt = Date.now();
   const urls = [];
   for (const [scheme, list] of Object.entries(perScheme)) {
@@ -72,6 +105,14 @@ export async function refresh({ perScheme = PROXY_SOURCES, parallel = 8, target 
   }
   const workers = Array.from({ length: parallel }, () => worker());
   await Promise.all(workers);
+
+  // Authenticated/premium proxies land in the same pool, seeded first so the
+  // per-chat rotation prefers them over the unverified public ones.
+  if (premiumFile) {
+    const items = await loadPremiumFile(premiumFile);
+    for (const p of items) upsertProxy(p);
+    inserted += items.length;
+  }
 
   const pruned = pruneProxies();
   const stats = proxyStats();

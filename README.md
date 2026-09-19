@@ -54,7 +54,9 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /start               Current model + active session
 /help                Full command reference
 /model [p/m]         Switch model  (e.g. /model openai/gpt-4o)
-/models              List every model
+/model list <p>      Live model list from the provider itself
+/model add <p/m>     Register a new model (admin) — e.g. /model add groq/new-model 128000
+/models              List every registered model
 /temperature <0-2>   Set temperature
 /system <prompt>     Set system prompt
 /reset               Clear history of active session
@@ -195,9 +197,17 @@ providers:
 - Admin commands require being physically inside the configured channel (DM refused).
 - Proxies are public, free, and used only for outbound LLM API calls. The bot does NOT route user traffic through them.
 
+## Docs
+
+- [`AGENTS.md`](AGENTS.md) — operator handbook: deploy, config locations, proxy troubleshooting
+- [`SOUL.md`](SOUL.md) — what the bot is, and its boundaries
+- [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
+- [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
+- [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and why the bot can't run shell commands
+
 ## Test
 
-```
+```bash
 node --test tests/
 ```
 3 tests cover config loading, Zod provider validation, and Zod rejection of malformed input.

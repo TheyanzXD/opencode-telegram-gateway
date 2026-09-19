@@ -72,12 +72,14 @@ CREATE TABLE IF NOT EXISTS proxies (
   scheme    TEXT NOT NULL,
   host      TEXT NOT NULL,
   port      INTEGER NOT NULL,
+  username  TEXT,
+  password  TEXT,
   source    TEXT,
   fails     INTEGER NOT NULL DEFAULT 0,
   ok_count  INTEGER NOT NULL DEFAULT 0,
   last_seen INTEGER,
   created_at INTEGER NOT NULL,
-  UNIQUE(scheme, host, port)
+  UNIQUE(scheme, host, port, username)
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxies_fail ON proxies(fails, ok_count DESC);
@@ -209,14 +211,14 @@ export function getActiveSession(user_id) {
 }
 
 // ---- proxies ----
-export function upsertProxy({ scheme, host, port, source }) {
+export function upsertProxy({ scheme, host, port, username, password, source }) {
   const now = Date.now();
   db.prepare(`
-    INSERT INTO proxies (scheme, host, port, source, last_seen, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(scheme, host, port) DO UPDATE SET
+    INSERT INTO proxies (scheme, host, port, username, password, source, last_seen, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scheme, host, port, username) DO UPDATE SET
       last_seen = excluded.last_seen
-  `).run(scheme, host, port, source || null, now, now);
+  `).run(scheme, host, port, username ?? null, password ?? null, source || null, now, now);
 }
 export function pickRandomProxy() {
   return db.prepare(`
@@ -227,7 +229,7 @@ export function pickRandomProxy() {
   `).get() || null;
 }
 export function pickProxyForChat(chatId) {
-  // Stable pick: hash(chatId) → first proxy with same parity
+  // Stable pick: hash(chatId) → same proxy per chat, falls back to direct if pool empty
   const ids = db.prepare('SELECT id FROM proxies WHERE fails < 5 ORDER BY id').all();
   if (!ids.length) return null;
   let h = 0;
@@ -235,6 +237,13 @@ export function pickProxyForChat(chatId) {
   const idx = Math.abs(h) % ids.length;
   const id = ids[idx].id;
   return db.prepare('SELECT * FROM proxies WHERE id = ?').get(id);
+}
+export function pickProxyForChatWithRotation(chatId) {
+  // Try the stable pick; if it has failed too many times, fall back to any
+  // healthy proxy so a dead entry doesn't permanently break one chat.
+  const p = pickProxyForChat(chatId);
+  if (p) return p;
+  return pickRandomProxy();
 }
 export function proxyOk(id) {
   db.prepare('UPDATE proxies SET ok_count = ok_count + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
