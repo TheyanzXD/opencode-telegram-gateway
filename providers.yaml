@@ -1,0 +1,53 @@
+# =====================================================
+# Providers — OpenAI-compatible endpoints
+# =====================================================
+# Each provider declares one or more "auth modes" (tried in order until one works):
+#   header:  { Authorization: "Bearer <KEY>" }
+#   xheader: { "x-api-key": "<KEY>" }
+#   query:   ?key=<KEY>
+#   body:    api_key in JSON body (used by some clones)
+#
+# Fill CODEFORLIFE_API_KEY in .env, then replace the placeholder base_url below.
+providers:
+  # ---------- codeforlife (default, custom OpenAI-compatible endpoint) ----------
+  - name: codeforlife
+    base_url: https://REPLACE_ME.example.com/v1
+    auth_mode: header
+    key_env: CODEFORLIFE_API_KEY
+    models:
+      buy/Jrouter/deepseek-v4-flash-0731:
+        context: 8192
+        vision: false
+
+  # ---------- OpenAI (official) ----------
+  - name: openai
+    base_url: https://api.openai.com/v1
+    auth_mode: header
+    key_env: OPENAI_API_KEY
+    models:
+      gpt-4o-mini:
+        context: 128000
+        vision: true
+      gpt-4o:
+        context: 128000
+        vision: true
+
+  # ---------- Anthropic via OpenRouter ----------
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    auth_mode: header
+    key_env: OPENROUTER_API_KEY
+    models:
+      anthropic/claude-3.5-sonnet:
+        context: 200000
+        vision: true
+
+  # ---------- Local Ollama (no auth) ----------
+  - name: ollama
+    base_url: http://localhost:11434/v1
+    auth_mode: none
+    key_env: OLLAMA_API_KEY
+    models:
+      llama3.2:
+        context: 128000
+        vision: false
