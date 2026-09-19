@@ -10,7 +10,7 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🖼 **Vision** — image attachments forwarded to vision-capable models automatically; override via `VISION_PROVIDER`/`VISION_MODEL`.
 - ⚡ **Streaming** — Telegram edit-in-place as the model types.
 - 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS). Authenticated premium proxies (`user:pass@ip:port`) load from a local gitignored file via `PROXY_PREMIUM_FILE`.
-- 🖥 **Headless browser** — `/browse` drives real Chromium: open, read, snapshot (`@eN` refs), click, type, screenshot, eval. Same `agent-browser` stack Hermes Agent uses. Optional — degrades to an install hint if absent.
+- 🖥 **Headless browser** — `/browse` drives real Chromium: open, read, snapshot (`@eN` refs), click, type, screenshot, eval. Same `agent-browser` stack Hermes Agent uses. Bundled — `npm ci` installs the CLI, Chromium fetches on first use.
 - 👮 **Admin channel gate** — `/admin` and `/sessions export` only work inside the configured `TELEGRAM_HOME_CHANNEL` (toggle with `ADMIN_REQUIRE_CHANNEL=false`).
 - 📦 **Export to home channel** — `/sessions export` and `/admin export` zip users/sessions/messages/usage/proxies/config and post the zip to your home channel.
 - 💾 **Single-file SQLite** — `better-sqlite3` WAL, zero ops. Schema: `users`, `messages`, `usage`, `sessions`, `proxies`.

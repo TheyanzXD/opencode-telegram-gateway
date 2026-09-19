@@ -21,16 +21,21 @@ Use /model to switch. /help for full commands.`,
 }
 
 export async function helpCommand(ctx) {
-  const admin = ctx.session?.isAdmin ? '\n/admin — admin panel (channel-only)\n/sessions — conversation sessions' : '\n/sessions — conversation sessions';
+  const admin = ctx.session?.isAdmin ? '\n/admin — admin panel (channel-only)' : '';
   await ctx.reply(
 `/start — show current model + session
 /help — this message
 /model [provider/model] — switch model
-/models — list available models
+/model list <provider> — live models from the provider
+/models — list registered models
 /temperature <0-2> — set temperature
 /system <prompt> — set system prompt
 /reset — clear history (active session)
-/history — show last messages (active session)${admin}`,
+/history — show last messages (active session)
+/sessions — conversation sessions${admin}
+
+/browse <cmd> <args> — headless browser: open <url>, snapshot, click, type, read, close
+/about — version, capabilities, config paths`,
     { parse_mode: 'Markdown' }
   );
 }
@@ -155,11 +160,20 @@ export async function historyCommand(ctx) {
 export async function aboutCommand(ctx) {
   const total = allModels().length;
   const u = getUser(ctx.from.id);
+  const model = u?.model ? `${u.provider}/${u.model}` : `${config.defaults.provider}/${config.defaults.model} (default)`;
+  let browserLine;
+  try {
+    const m = await import('../../browser/tool.js');
+    if (!m.browserAvailable()) browserLine = 'Browser: ⚠️ not installed (`npm run browser install`)';
+    else browserLine = `Browser: ✅ ${m.browserReady() ? 'ready' : 'Chromium fetches on first /browse'}`;
+  } catch { browserLine = 'Browser: —'; }
   await ctx.reply(
 `🤖 *OpenCode Gateway*
 Providers: ${providerNames().length}
 Models: ${total}
-Default: \`${u?.provider}/${u?.model}\`
+Default: \`${model}\`
+Proxy: ${config.proxy?.enabled ? '✅ on' : '⚠️ off'}
+${browserLine}
 Node ${process.version}`,
     { parse_mode: 'Markdown' }
   );
