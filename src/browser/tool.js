@@ -5,8 +5,32 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 
-const BROWSER_BIN = process.env.AGENT_BROWSER_BIN || 'agent-browser';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Resolve order: explicit override → local dependency (npm ci installs it) →
+// any agent-browser on PATH. The local copy is what makes /browse work with
+// zero extra install steps on a fresh clone.
+function resolveBrowserBin() {
+  if (process.env.AGENT_BROWSER_BIN) {
+    try { if (fs.statSync(process.env.AGENT_BROWSER_BIN).isFile()) return process.env.AGENT_BROWSER_BIN; }
+    catch { /* fall through */ }
+  }
+  const localEntry = path.join(__dirname, '..', '..', 'node_modules', 'agent-browser', 'bin', 'agent-browser.js');
+  if (fs.existsSync(localEntry)) return localEntry;
+  for (const c of ['agent-browser']) {
+    const r = spawnSync(c, ['--version'], { encoding: 'utf8', timeout: 4000 });
+    if (r.status === 0) return c;
+  }
+  return null;
+}
+
+let _BIN;
+const browserBin = () => (_BIN ??= resolveBrowserBin());
 
 // serialize per chat so concurrent commands can't race one browser session
 const _locks = new Map();
@@ -17,10 +41,27 @@ async function withChat(chatId, fn) {
 }
 
 export function browserAvailable() {
-  try {
-    return spawnSync(BROWSER_BIN, ['--version'], { encoding: 'utf8', timeout: 4000 }).status === 0;
-  } catch { return false; }
+  return browserBin() !== null;
 }
+
+// Chromium lives in the Playwright browser cache, keyed by revision. The
+// cache marks a finished download with INSTALLATION_COMPLETE; a half-fetch
+// is present but unusable, so look for the marker specifically.
+let _chromiumCache;
+export function browserReady() {
+  if (_chromiumCache !== undefined) return _chromiumCache;
+  const cacheRoot = path.join(os.homedir(), '.cache', 'ms-playwright');
+  try {
+    for (const entry of fs.readdirSync(cacheRoot, { withFileTypes: true })) {
+      if (!/chromium/i.test(entry.name) || !entry.isDirectory()) continue;
+      const mark = path.join(cacheRoot, entry.name, 'INSTALLATION_COMPLETE');
+      if (fs.existsSync(mark)) { _chromiumCache = true; return true; }
+    }
+  } catch { /* no cache yet */ }
+  _chromiumCache = false;
+  return false;
+}
+function markReady() { _chromiumCache = true; }
 
 /**
  * Run one agent-browser command.
@@ -29,8 +70,11 @@ export function browserAvailable() {
  * @returns {Promise<{ok:boolean, stdout:string, stderr:string, code:number}>}
  */
 export function browserExec(args, { timeoutMs = 60_000 } = {}) {
+  const bin = browserBin();
   return new Promise(resolve => {
-    const child = spawn(BROWSER_BIN, args, {
+    if (!bin) { resolve({ ok: false, stdout: '', stderr: 'agent-browser not installed', code: -1 }); return; }
+    const isJs = bin.endsWith('.js');
+    const child = spawn(isJs ? process.execPath : bin, isJs ? [bin, ...args] : args, {
       timeout: timeoutMs,
       env: { ...process.env },
       windowsHide: true,
@@ -49,6 +93,16 @@ export async function browserCommand(args, { chatId = 0, timeoutMs = 60_000 } = 
   return withChat(chatId, async () => {
     const [cmd, ...rest] = args;
     if (!cmd) return usageMarkdown();
+
+    // First run ever: the npm package ships without a browser. Fetch Chromium
+    // once, then proceed. Subsequent commands are instant.
+    if (!browserReady()) {
+      const r = await browserExec(['install', 'chromium'], { timeoutMs: 300_000 });
+      if (!r.ok) {
+        return '⚠️ Chromium belum terpasang dan pengambilan gagal.\n\nJalankan sekali di server: `npm run browser install` lalu coba lagi.';
+      }
+      markReady();
+    }
 
     const r = await browserExec([cmd, ...rest], { timeoutMs });
 

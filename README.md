@@ -9,7 +9,8 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 💬 **Conversation sessions** — `/sessions new|list|resume|delete|rename|export|active`. Each session scopes its own history in SQLite.
 - 🖼 **Vision** — image attachments forwarded to vision-capable models automatically; override via `VISION_PROVIDER`/`VISION_MODEL`.
 - ⚡ **Streaming** — Telegram edit-in-place as the model types.
-- 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS).
+- 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS). Authenticated premium proxies (`user:pass@ip:port`) load from a local gitignored file via `PROXY_PREMIUM_FILE`.
+- 🖥 **Headless browser** — `/browse` drives real Chromium: open, read, snapshot (`@eN` refs), click, type, screenshot, eval. Same `agent-browser` stack Hermes Agent uses. Optional — degrades to an install hint if absent.
 - 👮 **Admin channel gate** — `/admin` and `/sessions export` only work inside the configured `TELEGRAM_HOME_CHANNEL` (toggle with `ADMIN_REQUIRE_CHANNEL=false`).
 - 📦 **Export to home channel** — `/sessions export` and `/admin export` zip users/sessions/messages/usage/proxies/config and post the zip to your home channel.
 - 💾 **Single-file SQLite** — `better-sqlite3` WAL, zero ops. Schema: `users`, `messages`, `usage`, `sessions`, `proxies`.
@@ -29,6 +30,27 @@ npm start             # launch the bot
 ```
 
 You only need two things: a **Telegram bot token** (from [@BotFather](https://t.me/BotFather)) and **one API key** for the provider you picked as `DEFAULT_PROVIDER`. `providers.yaml` ships with public providers — OpenRouter and Groq both have free tiers that need only an email to sign up.
+
+### Optional: headless browser
+
+`agent-browser` is a dependency of the repo, so `npm ci` installs it. It does
+not bundle Chromium (~150 MB) — the first `/browse` fetches it once, or:
+
+```bash
+npm run browser install
+```
+
+`/browse open <url>` then works in chat.
+
+### Optional: authenticated proxies
+
+```bash
+echo 'user:pass@1.2.3.4:1081' >> premium-proxy-list.txt   # socks5, one per line
+# .env
+PROXY_PREMIUM_FILE=/absolute/path/to/premium-proxy-list.txt
+```
+
+Premium entries are seeded ahead of the public lists, so per-chat rotation prefers them. The file is gitignored — never commit credentials.
 
 `better-sqlite3` builds natively but `npm ci` handles it via prebuilt binaries for the common Node versions — no `apt`, no `sudo`, no system packages.
 

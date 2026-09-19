@@ -10,6 +10,11 @@
   "scripts": {
     "start": "node src/index.js",
     "setup": "node bin/opencode-gateway.js setup",
+    "doctor": "node bin/opencode-gateway.js doctor",
+    "proxy": "node bin/opencode-gateway.js proxy",
+    "browser": "node bin/opencode-gateway.js browser",
+    "tui": "node bin/opencode-gateway.js tui",
+    "models": "node bin/opencode-gateway.js models",
     "interactive": "node bin/opencode-gateway.js tui",
     "test": "node --test tests/",
     "lint": "node scripts/lint.js",
@@ -28,6 +33,9 @@
     "undici": "^7.2.0",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "agent-browser": "^0.37.0"
   },
   "devDependencies": {
     "prettier": "^3.4.2"

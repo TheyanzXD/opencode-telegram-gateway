@@ -7,20 +7,22 @@ plus Playwright Chromium, driven over a subprocess.
 
 ## Install
 
+`agent-browser` is already a dependency of this repo — `npm ci` installs it.
+The one thing it does **not** bundle is Chromium (~150 MB), because shipping
+that in every install would be wasteful.
+
+The first `/browse` in a fresh clone fetches Chromium once, then proceeds.
+To do it ahead of time instead:
+
 ```bash
-npm install -g agent-browser
-agent-browser install chromium      # ~150 MB, one-time
+npm run browser install    # fetch Chromium now, one-time
+npm run browser status     # is it resolvable?
+npm run browser verify https://example.com   # open + read a page
 ```
 
-Verify:
-
-```bash
-agent-browser --version
-```
-
-Nothing is downloaded at runtime and the bot does not install Chromium for
-you — if `agent-browser` is missing, `/browse` answers with the install
-line instead of an error.
+Resolution order for the binary: `AGENT_BROWSER_BIN` → the local dependency
+→ any `agent-browser` on PATH. If none is found, `/browse` replies with the
+install line instead of crashing.
 
 ## Commands
 
