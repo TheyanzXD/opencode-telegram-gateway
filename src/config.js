@@ -70,6 +70,17 @@ export const config = {
   historyLimit: int(process.env.HISTORY_LIMIT, 20),
   maxInputChars: int(process.env.MAX_INPUT_CHARS, 8000),
   streaming: bool(process.env.STREAMING, true),
+  // agent layer: tool-calling loop, HITL approvals, workspace sandbox
+  agent: {
+    enabled: bool(process.env.AGENT_ENABLED, false),
+    workspace: path.resolve(process.env.AGENT_WORKSPACE || path.join(ROOT, 'workspace')),
+    maxTurns: int(process.env.AGENT_MAX_TURNS, 20),
+    bashTimeoutMs: int(process.env.BASH_TIMEOUT_MS, 30_000),
+    approveTimeoutMs: int(process.env.AGENT_APPROVE_TIMEOUT_MS, 10 * 60 * 1000),
+    debounceMs: int(process.env.AGENT_DEBOUNCE_MS, 1500),
+    // tools the agent may never call, even with approval
+    blockedTools: csv(process.env.AGENT_BLOCKED_TOOLS),
+  },
   proxy: {
     enabled: bool(process.env.PROXY_ENABLED, true),
     target: int(process.env.PROXY_TARGET, 10_000),

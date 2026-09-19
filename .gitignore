@@ -7,3 +7,4 @@ proxy-premium*.txt
 .DS_Store
 dist/
 coverage/
+workspace/

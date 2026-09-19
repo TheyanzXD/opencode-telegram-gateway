@@ -72,6 +72,8 @@ async function requestJson(providerName, endpoint, body, signal, chatId) {
   }
 }
 
+export { requestJson };
+
 async function* streamChunks(providerName, body, signal, chatId) {
   const provider = getProvider(providerName);
   if (!provider) throw new Error(`Unknown provider: ${providerName}`);

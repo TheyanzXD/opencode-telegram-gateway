@@ -35,6 +35,9 @@ export async function helpCommand(ctx) {
 /sessions — conversation sessions${admin}
 
 /browse <cmd> <args> — headless browser: open <url>, snapshot, click, type, read, close
+/agent <task> — tool-calling agent: shell, files, web search (approvals for destructive tools)
+/abort — cancel the running /agent in this chat
+/tools — list the agent's tools
 /about — version, capabilities, config paths`,
     { parse_mode: 'Markdown' }
   );
@@ -174,6 +177,7 @@ Models: ${total}
 Default: \`${model}\`
 Proxy: ${config.proxy?.enabled ? '✅ on' : '⚠️ off'}
 ${browserLine}
+Agent: ${config.agent?.enabled ? '✅ on (`/agent <task>`)' : '⚠️ off (AGENT_ENABLED)'}
 Node ${process.version}`,
     { parse_mode: 'Markdown' }
   );

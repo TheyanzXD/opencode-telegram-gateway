@@ -11,6 +11,7 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - ⚡ **Streaming** — Telegram edit-in-place as the model types.
 - 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS). Authenticated premium proxies (`user:pass@ip:port`) load from a local gitignored file via `PROXY_PREMIUM_FILE`.
 - 🖥 **Headless browser** — `/browse` drives real Chromium: open, read, snapshot (`@eN` refs), click, type, screenshot, eval. Same `agent-browser` stack Hermes Agent uses. Bundled — `npm ci` installs the CLI, Chromium fetches on first use.
+- 🤖 **Agent mode** — `/agent <task>` runs a tool-calling loop: `execute_bash`, `read/write/edit_file`, `list_dir`, `web_search`, `fetch_url`. Destructive tools pause for a one-tap approval (inline keyboard), progress streams into one message. Off by default (`AGENT_ENABLED=true` to enable). See [docs/agent.md](docs/agent.md).
 - 👮 **Admin channel gate** — `/admin` and `/sessions export` only work inside the configured `TELEGRAM_HOME_CHANNEL` (toggle with `ADMIN_REQUIRE_CHANNEL=false`).
 - 📦 **Export to home channel** — `/sessions export` and `/admin export` zip users/sessions/messages/usage/proxies/config and post the zip to your home channel.
 - 💾 **Single-file SQLite** — `better-sqlite3` WAL, zero ops. Schema: `users`, `messages`, `usage`, `sessions`, `proxies`.
@@ -81,6 +82,9 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /models              List every registered model
 /browse [...]         Headless browser — see below
 /browse open <url>    Open a page, then snapshot/click/type/read it
+/agent <task>         Tool-calling agent — shell, files, web search (see docs/agent.md)
+/abort                Cancel the running /agent in this chat
+/tools                List the agent's tools
 /temperature <0-2>   Set temperature
 /system <prompt>     Set system prompt
 /reset               Clear history of active session

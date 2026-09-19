@@ -8,6 +8,9 @@ import {
 } from './commands/user.js';
 import { adminCommand } from './commands/admin.js';
 import { sessionsCommand } from './commands/sessions.js';
+import {
+  agentCommand, abortCommand, toolsCommand, approvalCallback,
+} from './commands/agent.js';
 import { browserSafe } from '../browser/tool.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
@@ -55,6 +58,13 @@ export function createBot() {
   bot.command('admin', adminCommand);
   bot.command('sessions', sessionsCommand);
 
+  // Agent — tool-calling loop with HITL approvals
+  bot.command('agent', agentCommand);
+  bot.command('abort', abortCommand);
+  bot.command('tools', toolsCommand);
+  bot.callbackQuery(/^approve:/, approvalCallback);
+  bot.callbackQuery(/^deny:/, approvalCallback);
+
   // Browser automation — state persists per chat until /browse close
   bot.command('browse', async (ctx) => {
     const arg = (ctx.match || '').trim();
@@ -90,7 +100,13 @@ export async function run() {
     allowed: config.telegram.allowed.length,
     proxy_enabled: config.proxy.enabled,
     admin_channel: config.admin.channelId || '(any)',
+    agent_enabled: config.agent.enabled,
+    workspace: config.agent.workspace,
   }, 'starting bot');
+  if (config.agent.enabled) {
+    const fs = await import('node:fs');
+    fs.mkdirSync(config.agent.workspace, { recursive: true });
+  }
   // bot.start() rejects on 401/409 — without await+catch it becomes an
   // unhandledRejection and the process lingers as a zombie with dead polling.
   bot
