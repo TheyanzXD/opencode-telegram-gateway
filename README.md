@@ -224,6 +224,7 @@ providers:
 ## Docs
 - [`AGENTS.md`](AGENTS.md) — operator handbook: deploy, config locations, proxy troubleshooting
 - [`SOUL.md`](SOUL.md) — what the bot is, and its boundaries
+- [`prompts/default.md`](prompts/default.md) — the default system prompt, annotated. Live version: `SYSTEM_PROMPT` in `.env`
 - [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
 - [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
 - [`docs/browser.md`](docs/browser.md) — `/browse`, headless Chromium via agent-browser
