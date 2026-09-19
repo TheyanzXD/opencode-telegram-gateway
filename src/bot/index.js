@@ -81,9 +81,16 @@ export async function run() {
     proxy_enabled: config.proxy.enabled,
     admin_channel: config.admin.channelId || '(any)',
   }, 'starting bot');
-  bot.start({
-    onStart: (botInfo) => logger.info({ username: botInfo.username }, 'bot online'),
-  });
+  // bot.start() rejects on 401/409 — without await+catch it becomes an
+  // unhandledRejection and the process lingers as a zombie with dead polling.
+  bot
+    .start({
+      onStart: (botInfo) => logger.info({ username: botInfo.username }, 'bot online'),
+    })
+    .catch((err) => {
+      logger.error({ err: err.message }, 'polling stopped');
+      process.exit(1);
+    });
 }
 
 export function shutdown() {

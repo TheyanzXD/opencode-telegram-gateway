@@ -20,7 +20,7 @@ Use /model to switch. /help for full commands.`,
 }
 
 export async function helpCommand(ctx) {
-  const admin = ctx.state.isAdmin ? '\n/admin — admin panel (channel-only)\n/sessions — conversation sessions' : '\n/sessions — conversation sessions';
+  const admin = ctx.session?.isAdmin ? '\n/admin — admin panel (channel-only)\n/sessions — conversation sessions' : '\n/sessions — conversation sessions';
   await ctx.reply(
 `/start — show current model + session
 /help — this message

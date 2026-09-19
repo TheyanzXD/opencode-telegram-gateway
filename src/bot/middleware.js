@@ -8,17 +8,17 @@ export function authMiddleware(ctx, next) {
     logger.warn({ user: u.id }, 'unauthorized');
     return ctx.reply('🚫 You are not authorized to use this bot.');
   }
-  if (ctx.dbUser?.is_banned) {
-    return ctx.reply('🚫 You are banned.');
-  }
-  if (isAdmin(u.id)) ctx.state.isAdmin = true;
-  if (isAdminChannel(ctx.chat?.id)) ctx.state.isAdminChannel = true;
-  return next();
+  // grammY has no ctx.state — carry flags in ctx.session instead
+  if (!ctx.session) ctx.session = {};
+  if (isAdmin(u.id)) ctx.session.isAdmin = true;
+  if (isAdminChannel(ctx.chat?.id)) ctx.session.isAdminChannel = true;
+  if (!ctx.dbUser?.is_banned) return next();
+  return ctx.reply('🚫 You are banned.');
 }
 
 export function adminOnly(ctx, next) {
-  if (!ctx.state.isAdmin) return ctx.reply('🚫 Admin only.');
-  if (!ctx.state.isAdminChannel) return ctx.reply('🔒 Admin commands are restricted to the configured channel.');
+  if (!ctx.session?.isAdmin) return ctx.reply('🚫 Admin only.');
+  if (!ctx.session?.isAdminChannel) return ctx.reply('🔒 Admin commands are restricted to the configured channel.');
   return next();
 }
 

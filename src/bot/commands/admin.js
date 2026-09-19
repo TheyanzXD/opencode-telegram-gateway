@@ -8,8 +8,8 @@ import { config } from '../../config.js';
 
 export async function adminCommand(ctx) {
   // Gate: admin commands only allowed in the configured channel
-  if (!ctx.state.isAdmin) return ctx.reply('🚫 Admin only.');
-  if (!ctx.state.isAdminChannel) {
+  if (!ctx.session?.isAdmin) return ctx.reply('🚫 Admin only.');
+  if (!ctx.session?.isAdminChannel) {
     return ctx.reply('🔒 Admin commands are restricted to the configured channel.');
   }
   const arg = (ctx.match || '').trim();

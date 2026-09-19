@@ -138,7 +138,13 @@ export async function chatCompletion(args) {
   return { content, usage, raw: data };
 }
 
-export async function streamChatCompletion(args) {
+export function streamChatCompletion(args) {
+  // must be a plain function returning the async generator directly:
+  // `for await (… of streamChatCompletion(…))` iterates the return value,
+  // so returning a Promise here makes the stream "not async iterable".
+  if (!getProvider(args.provider)) {
+    throw new Error(`Unknown provider: ${args.provider}`);
+  }
   return streamChunks(args.provider, {
     model: args.model,
     messages: args.messages,
