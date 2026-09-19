@@ -57,6 +57,8 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /model list <p>      Live model list from the provider itself
 /model add <p/m>     Register a new model (admin) — e.g. /model add groq/new-model 128000
 /models              List every registered model
+/browse [...]         Headless browser — see below
+/browse open <url>    Open a page, then snapshot/click/type/read it
 /temperature <0-2>   Set temperature
 /system <prompt>     Set system prompt
 /reset               Clear history of active session
@@ -198,11 +200,11 @@ providers:
 - Proxies are public, free, and used only for outbound LLM API calls. The bot does NOT route user traffic through them.
 
 ## Docs
-
 - [`AGENTS.md`](AGENTS.md) — operator handbook: deploy, config locations, proxy troubleshooting
 - [`SOUL.md`](SOUL.md) — what the bot is, and its boundaries
 - [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
 - [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
+- [`docs/browser.md`](docs/browser.md) — `/browse`, headless Chromium via agent-browser
 - [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and why the bot can't run shell commands
 
 ## Test

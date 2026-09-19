@@ -8,6 +8,7 @@ import {
 } from './commands/user.js';
 import { adminCommand } from './commands/admin.js';
 import { sessionsCommand } from './commands/sessions.js';
+import { browserSafe } from '../browser/tool.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
 import { sweepDead } from '../proxy/pool.js';
@@ -53,6 +54,15 @@ export function createBot() {
   bot.command('about', aboutCommand);
   bot.command('admin', adminCommand);
   bot.command('sessions', sessionsCommand);
+
+  // Browser automation — state persists per chat until /browse close
+  bot.command('browse', async (ctx) => {
+    const arg = (ctx.match || '').trim();
+    if (!arg) return ctx.reply(browserSafe.usageMarkdown(), { parse_mode: 'Markdown' });
+    const args = arg.split(/\s+/);
+    const reply = await browserSafe(args, { chatId: ctx.chat.id });
+    return ctx.reply(reply.slice(0, 4090), { parse_mode: 'Markdown' });
+  });
 
   // Fallbacks
   bot.on('message:text', onText);
