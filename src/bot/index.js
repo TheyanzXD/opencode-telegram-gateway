@@ -82,7 +82,7 @@ export async function run() {
     admin_channel: config.admin.channelId || '(any)',
   }, 'starting bot');
   bot.start({
-    onStart: (b) => logger.info({ username: b.botInfo.username }, 'bot online'),
+    onStart: (botInfo) => logger.info({ username: botInfo.username }, 'bot online'),
   });
 }
 
