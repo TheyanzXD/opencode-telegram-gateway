@@ -4,7 +4,7 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 
 ## Features
 
-- 🛰 **Multi-provider** — any OpenAI-compatible endpoint. Five auth modes (`header` / `xheader` / `query` / `body` / `none`) cover OpenAI, Anthropic-via-OpenRouter, OpenAI-style clones (e.g. `codeforlife.my.id` uses `xheader`), local Ollama, custom gateways.
+- 🛰 **Multi-provider** — any OpenAI-compatible endpoint. Five auth modes (`header` / `xheader` / `query` / `body` / `none`) cover OpenAI, OpenRouter, Groq, DeepInfra, OpenAI-style clones, local Ollama, and custom gateways.
 - 🛡 **Zod-validated** config — malformed `providers.yaml` is rejected at boot, never silently accepted.
 - 💬 **Conversation sessions** — `/sessions new|list|resume|delete|rename|export|active`. Each session scopes its own history in SQLite.
 - 🖼 **Vision** — image attachments forwarded to vision-capable models automatically; override via `VISION_PROVIDER`/`VISION_MODEL`.
@@ -17,16 +17,18 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🧙 **CLI setup wizard** — `npm run setup` walks you through bot token, providers, defaults. No config files to handcraft.
 - 🩺 **Doctor** — `npm run doctor` validates everything and pings each provider with a real prompt.
 
-## Install (no root)
+## Quick start (no root)
 
 ```bash
 git clone https://github.com/TheyanzXD/opencode-telegram-gateway.git
 cd opencode-telegram-gateway
 npm ci                # ~80 packages, no sudo, no global state
-npm run setup         # interactive wizard — creates .env + providers.yaml
-npm run doctor        # validate, ping each provider, send a test prompt
+cp .env.example .env  # then put your bot token in .env
+npm run doctor        # validate config + ping each provider
 npm start             # launch the bot
 ```
+
+You only need two things: a **Telegram bot token** (from [@BotFather](https://t.me/BotFather)) and **one API key** for the provider you picked as `DEFAULT_PROVIDER`. `providers.yaml` ships with public providers — OpenRouter and Groq both have free tiers that need only an email to sign up.
 
 `better-sqlite3` builds natively but `npm ci` handles it via prebuilt binaries for the common Node versions — no `apt`, no `sudo`, no system packages.
 
@@ -95,8 +97,10 @@ TELEGRAM_ALLOWED_USERS=111,222
 TELEGRAM_ADMIN_USERS=111
 TELEGRAM_HOME_CHANNEL=-1001234567890
 
-DEFAULT_PROVIDER=openai
-DEFAULT_MODEL=gpt-4o-mini
+# Ship defaults point at openrouter + a free model.
+# Any provider in providers.yaml works here.
+DEFAULT_PROVIDER=openrouter
+DEFAULT_MODEL=deepseek/deepseek-chat-v3-0324:free
 DEFAULT_TEMPERATURE=0.7
 DEFAULT_MAX_TOKENS=4096
 SYSTEM_PROMPT=You are a helpful assistant.
@@ -124,20 +128,20 @@ ADMIN_REQUIRE_CHANNEL=true
 
 ```yaml
 providers:
-  - name: openai
-    base_url: https://api.openai.com/v1
-    auth_mode: header              # Bearer
-    key_env: OPENAI_API_KEY
-    models:
-      gpt-4o-mini: { context: 128000, vision: true }
-      gpt-4o:      { context: 128000, vision: true }
-
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    auth_mode: header
+    auth_mode: header              # Bearer
     key_env: OPENROUTER_API_KEY
     models:
+      deepseek/deepseek-chat-v3-0324:free: { context: 64000 }
       anthropic/claude-3.5-sonnet: { context: 200000, vision: true }
+
+  - name: groq
+    base_url: https://api.groq.com/openai/v1
+    auth_mode: header
+    key_env: GROQ_API_KEY
+    models:
+      llama-3.3-70b-versatile: { context: 128000 }
 
   - name: ollama
     base_url: http://localhost:11434/v1
@@ -182,7 +186,7 @@ providers:
 
 **Sessions:** Each `messages` row stores a nullable `session_id`. `/sessions new` creates a session and sets it active (deactivating any previous one). `/sessions resume` flips the active flag. `/sessions delete` orphans its messages (kept in DB) and removes the session row. `/sessions export` zips messages + Markdown render of every conversation and posts the zip to the home channel.
 
-**Admin gate:** `authMiddleware` sets `ctx.state.isAdminChannel = (chat.id == TELEGRAM_HOME_CHANNEL)` (configurable via `ADMIN_REQUIRE_CHANNEL`). `/admin` and `/sessions export` both check this state.
+**Admin gate:** `authMiddleware` sets `ctx.session.isAdminChannel = (chat.id == TELEGRAM_HOME_CHANNEL)` (configurable via `ADMIN_REQUIRE_CHANNEL`). `/admin` and `/sessions export` both check this flag.
 
 ## Security & privacy
 

@@ -1,25 +1,22 @@
 # =====================================================
 # Providers — OpenAI-compatible endpoints
 # =====================================================
-# Each provider declares one or more "auth modes" (tried in order until one works):
+# This file ships with sensible public defaults so the bot works right
+# after `git clone` + `.env` (see .env.example).
+#
+# Each provider declares an auth mode:
 #   header:  { Authorization: "Bearer <KEY>" }
 #   xheader: { "x-api-key": "<KEY>" }
 #   query:   ?key=<KEY>
 #   body:    api_key in JSON body (used by some clones)
+#   none:    no auth (local servers)
 #
-# Fill CODEFORLIFE_API_KEY in .env, then replace the placeholder base_url below.
-providers:
-  # ---------- codeforlife (default, custom OpenAI-compatible endpoint) ----------
-  - name: codeforlife
-    base_url: https://REPLACE_ME.example.com/v1
-    auth_mode: header
-    key_env: CODEFORLIFE_API_KEY
-    models:
-      buy/Jrouter/deepseek-v4-flash-0731:
-        context: 8192
-        vision: false
+# Put your API keys in .env using the key_env name below — they never
+# belong in this file. Add your own providers the same way.
 
+providers:
   # ---------- OpenAI (official) ----------
+  # https://platform.openai.com/api-keys
   - name: openai
     base_url: https://api.openai.com/v1
     auth_mode: header
@@ -32,17 +29,56 @@ providers:
         context: 128000
         vision: true
 
-  # ---------- Anthropic via OpenRouter ----------
+  # ---------- OpenRouter (aggregator, many free models) ----------
+  # https://openrouter.ai/keys
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
     auth_mode: header
     key_env: OPENROUTER_API_KEY
     models:
+      deepseek/deepseek-chat-v3-0324:free:
+        context: 64000
+        vision: false
+      meta-llama/llama-3.3-70b-instruct:free:
+        context: 131072
+        vision: false
+      google/gemini-2.0-flash-exp:free:
+        context: 1000000
+        vision: true
       anthropic/claude-3.5-sonnet:
         context: 200000
         vision: true
 
-  # ---------- Local Ollama (no auth) ----------
+  # ---------- DeepInfra (hosted open models) ----------
+  # https://deepinfra.com/dashboards/api_keys
+  - name: deepinfra
+    base_url: https://api.deepinfra.com/v1/openai
+    auth_mode: header
+    key_env: DEEPINFRA_API_KEY
+    models:
+      deepseek-ai/DeepSeek-V3:
+        context: 64000
+        vision: false
+      meta-llama/Meta-Llama-3.1-8B-Instruct:
+        context: 128000
+        vision: false
+
+  # ---------- Groq (fast inference, free tier) ----------
+  # https://console.groq.com/keys
+  - name: groq
+    base_url: https://api.groq.com/openai/v1
+    auth_mode: header
+    key_env: GROQ_API_KEY
+    models:
+      llama-3.3-70b-versatile:
+        context: 128000
+        vision: false
+      deepseek-r1-distill-llama-70b:
+        context: 131072
+        vision: false
+
+  # ---------- Local Ollama (no auth needed) ----------
+  # Run `ollama serve` locally; nothing to fill in.
   - name: ollama
     base_url: http://localhost:11434/v1
     auth_mode: none
