@@ -182,3 +182,29 @@ question with either choice buttons or a "type an answer" affordance, and the
 turn resumes when the answer lands — a button tap or a typed reply, either
 works. A question unanswered for 30 minutes resolves to "proceed with your
 best judgment", so an unattended run does not hang.
+
+## Architecture awareness
+
+A model that gets a tool list but no context answers "can you browse files?"
+the way every chatbot does: no. It is not wrong about itself — nothing in its
+prompt said otherwise.
+
+`/agent` now builds its messages with a second system message below the
+personality: an architecture brief. Everything in it is computed at runtime, so
+it is never told a capability it does not have.
+
+- **Where it runs** — hostname, platform/arch, CPU model, runtime. "You are an
+  agent process on a real machine," stated once, plainly.
+- **What it can reach** — the workspace path for *this* user, whether the
+  Camoufox binary is actually installed (absent: the browser line says so, and
+  names `fetch_url` and `web_search` as the working substitutes), the shell,
+  jobs, tunneling, memory.
+- **How to use the tools** — read before write, `glob`/`grep` before reading
+  blind, `job_start` for anything long, which tools pause for approval.
+- **Boundaries** — it cannot see the user's screen or phone storage, another
+  user's workspace is not accessible, it holds no third-party credentials. When
+  the user means a file on their own device, the brief tells it to say so and
+  ask for the content.
+
+The brief is cached 30s and sits inside the cached prefix, so it costs once per
+conversation, not once per turn.

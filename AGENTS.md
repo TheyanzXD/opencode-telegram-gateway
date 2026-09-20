@@ -226,6 +226,7 @@ string, not a boolean. A 30-minute TTL means an unattended run does not hang.
 
 ```
 src/agent/workspace.js        per-user workspace isolation (bash + fs)
+src/agent/awareness.js        the architecture brief — computed, never hardcoded
 src/agent/personality.js      soul.md loader
 src/agent/subagent-runner.js  delegated subtask execution
 src/mcp/client.js             MCP stdio + HTTP client

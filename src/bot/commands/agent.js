@@ -8,7 +8,9 @@
 // the loop checks the signal between turns.
 
 import { config } from '../../config.js';
-import { ensureUser, buildMessages, persistTurn, currentSessionId } from '../../conversation.js';
+import { ensureUser, persistTurn, currentSessionId } from '../../conversation.js';
+import { workspaceFor } from '../../agent/workspace.js';
+import { architectureBrief } from '../../agent/awareness.js';
 import { logger } from '../../logger.js';
 import { AgentEngine } from '../../agent/engine.js';
 import { TelegramPresenter } from '../../agent/presenter.js';
@@ -22,6 +24,23 @@ const runs = new Map();
 
 export function isAgentRun(chatId) {
   return runs.has(String(chatId));
+}
+
+// The agent's messages differ from a plain chat: the system prompt carries an
+// architecture brief so the model knows it runs on a real host with real tools.
+// Without it, "can you browse files?" gets the generic chatbot answer — no.
+function buildAgentMessages(user, currentTurn, sessionId, chatId) {
+  const sys = { role: 'system', content: user.system_prompt || config.defaults.systemPrompt };
+  const ws = workspaceFor(user.user_id);
+  const brief = {
+    role: 'system',
+    content: architectureBrief({ workspace: ws, chatId }),
+  };
+  const history = getHistory(user.user_id, config.historyLimit, sessionId).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+  return [sys, brief, ...history, { role: 'user', content: currentTurn }];
 }
 
 export async function agentCommand(ctx) {
@@ -105,7 +124,7 @@ async function runAgent(ctx, prompt) {
 
   try {
     await presenter.init('🧠 thinking…');
-    const messages = buildMessages(user, prompt, sessionId);
+    const messages = buildAgentMessages(user, prompt, sessionId, ctx.chat.id);
     const final = await engine.run({
       messages,
       chatId,
