@@ -276,5 +276,4 @@ export const memoryTools = [
   rememberTool, recallTool, forgetTool,
   lessonTool, lessonQueryTool,
   decideTool,
-  scratchWriteTool, scratchReadTool,
 ];

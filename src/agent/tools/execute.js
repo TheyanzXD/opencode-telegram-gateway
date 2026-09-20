@@ -83,7 +83,10 @@ export const executeNode = {
   async execute({ code, timeout_ms }, _ctx = {}) {
     // Wrap so the last expression becomes a return: { …code } keeps
     // statements working while the final expression is the value.
-    const wrapped = `(function() { ${code} })()`;
+    // An IIFE with a return turns the last expression into a value. runInContext
+    // is synchronous, so the code must be too — async code returns a Promise the
+    // sandbox stringifies rather than resolving.
+    const wrapped = `(function() { return (function(){ ${code} })(); })()`;
     const ctx = vm.createContext({ console, JSON, Math, Object, Array, String, Number, Boolean, Date, RegExp, Map, Set, Error, setTimeout: () => {} });
     let value;
     try {
@@ -91,8 +94,11 @@ export const executeNode = {
     } catch (err) {
       return `⚠️ evaluation failed: ${err.message}`;
     }
+    if (value && typeof value.then === 'function') {
+      return '⚠️ async code is not supported — execute_node is synchronous. Use execute_bash or job_start for that.';
+    }
     const out = typeof value === 'string' ? value : safeJson(value);
-    return out.slice(0, MAX_OUTPUT);
+    return (out == null ? 'undefined' : String(out)).slice(0, MAX_OUTPUT);
   },
 };
 

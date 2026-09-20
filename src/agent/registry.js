@@ -10,6 +10,9 @@ import { browserTools } from './tools/browser.js';
 import { execTools } from './tools/execute.js';
 import { fileTools } from './tools/files.js';
 import { memoryTools } from './tools/memory.js';
+import { subagentTools } from './tools/subagent.js';
+import { browserAdvancedTools } from './tools/browser-advanced.js';
+import { observabilityTools } from './tools/observability.js';
 import { sysinfoTool } from './tools/sysinfo.js';
 
 export class ToolRegistry {
@@ -77,6 +80,7 @@ export class ToolRegistry {
 export function createDefaultRegistry() {
   return new ToolRegistry([
     bashTool, ...fsTools, ...searchTools, ...browserTools,
-    ...execTools, ...fileTools, ...memoryTools, sysinfoTool,
+    ...browserAdvancedTools, ...execTools, ...fileTools, ...memoryTools,
+    ...subagentTools, ...observabilityTools, sysinfoTool,
   ]);
 }

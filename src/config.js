@@ -87,6 +87,19 @@ export const config = {
     guardianProvider: process.env.GUARDIAN_PROVIDER || '',
     guardianModel: process.env.GUARDIAN_MODEL || '',
     skillRoot: process.env.SKILLS_DIR || '',
+    // session expiry: history older than this is forgotten (default 30d)
+    sessionTtlDays: int(process.env.SESSION_TTL_DAYS, 30),
+    // DLQ + secret redaction are always on; these only tune the noise level
+    redactEnvInOutput: bool(process.env.REDACT_ENV, true),
+  },
+  // model fallback chain — a provider going down should not take the bot down
+  fallback: {
+    chain: process.env.FALLBACK_CHAIN || '',
+  },
+  // webhook + watchdog. silentMinutes: if no traffic for this long the
+  // health endpoint reports 503 so an external probe restarts the process
+  watchdog: {
+    silentMinutes: int(process.env.WATCHDOG_SILENT_MINUTES, 30),
   },
   plugins: {
     enabled: bool(process.env.PLUGINS_ENABLED, true),

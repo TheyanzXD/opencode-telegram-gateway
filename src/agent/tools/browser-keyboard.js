@@ -59,7 +59,9 @@ function parseKeys(spec) {
 // ------------------------------------------------------------------ the tool
 
 const keyboardSchema = z.object({
-  keys: z.string().min(1).max(40),
+  keys: z.string().min(1).max(40).refine((v) => !parseKeys(v).err, (v) => ({
+    message: parseKeys(v).err || 'invalid keys',
+  })),
   target: z.string().min(1).optional(),
   count: z.number().int().positive().max(20).optional(),
   delay_ms: z.number().int().positive().max(2000).optional(),

@@ -13,6 +13,25 @@ import {
 } from './commands/agent.js';
 import { yoloCommand, estopCommand } from './commands/agent-admin.js';
 import { debugCommand, pluginsCommand } from './commands/debug.js';
+import { usageCommand, quotaCommand } from './commands/usage.js';
+import {
+  stopCallback, regenCallback, exportConversation,
+  replyContext, rememberAnswer, regenKeyboard, stopKeyboard,
+  abortControllerFor, releaseAbortController,
+  stopPrefix, regenPrefix, expireOldSessions,
+} from './features/threads.js';
+import { onInlineQuery, onEditedMessage, sessionForTopic } from './features/inline.js';
+import { setLanguage, languageFor, supportedLanguages, t } from './features/i18n.js';
+import {
+  startWebhook, healthHandler, startWatchdog, installReloadHooks, touchActivity,
+} from './health.js';
+import { langCommand, keyCommand } from './commands/account.js';
+import { soulCommand } from './commands/soul.js';
+import { pinCommand, searchCommand } from './commands/search.js';
+import { loadSubscribers, emit } from './features/webhooks.js';
+import { pinnedBlock } from './features/pinned.js';
+import { loadMcpServers, allMcpTools } from '../mcp/client.js';
+import { setKey, getKey, clearKey, resolvedKeyFor } from '../providers/keys.js';
 import { pluginsLoader } from '../plugins/state.js';
 import { leaseMiddleware } from '../agent/turn-lease.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
@@ -55,6 +74,15 @@ export function createBot() {
   }));
   // typing indicator while a previous turn is still running in this chat
   bot.use(leaseMiddleware());
+  // expose reply context + the active abort controller to handlers
+  bot.use(async (ctx, next) => {
+    ctx.threads = {
+      replyContext: (sid) => replyContext(ctx, sid),
+      rememberAnswer, regenKeyboard, stopKeyboard,
+      abortControllerFor, releaseAbortController,
+    };
+    await next();
+  });
 
   // Commands
   bot.command('start', startCommand);
@@ -77,20 +105,67 @@ export function createBot() {
   bot.command('estop', estopCommand);
   bot.command('debug', debugCommand);
   bot.command('plugins', pluginsCommand);
-  bot.callbackQuery(/^approve:/, approvalCallback);
-  bot.callbackQuery(/^deny:/, approvalCallback);
-
-  // Browser is an agent tool now, not a chat command: the model calls
-  // browser_navigate / browser_snapshot / browser_click via /agent.
+  bot.command('usage', usageCommand);
+  bot.command('cost', usageCommand);
+  bot.command('quota', quotaCommand);
+  bot.command('export', exportConversation);
+  bot.command('lang', langCommand);
+  bot.command('key', keyCommand);
+  bot.command('soul', soulCommand);
+  bot.command('pin', pinCommand);
+  bot.command('search', searchCommand);
+  // account: language switch + bring-your-own-key
+  bot.on('inline_query', onInlineQuery);
+  bot.on('edited_message', onEditedMessage);
 
   // Fallbacks
-  bot.on('message:text', onText);
-  bot.on('message:photo', onPhoto);
-  bot.on('message:document', onDocument);
+  bot.on('message:text', (ctx, next) => { touchActivity(); return onText(ctx, next); });
+  bot.on('message:photo', (ctx, next) => { touchActivity(); return onPhoto(ctx, next); });
+  bot.on('message:document', (ctx, next) => { touchActivity(); return onDocument(ctx, next); });
+
+  installReloadHooks([
+    () => import('../config.js').then((m) => m.reloadConfig?.()),
+    () => import('../providers/store.js').then((m) => m.reloadProviders?.()),
+  ]);
+  startWatchdog();
+
+  if (process.env.WEBHOOK_URL || process.env.WEBHOOK_PORT) {
+    // webhook + health endpoint on the same port
+    return startWebhook(bot, {}).then((info) => {
+      logger.info(info, 'webhook mode');
+      return bot;
+    });
+  }
 
   bot.catch((err) => {
     logger.error({ err: err.message, ctx: err.ctx?.update?.update_id }, 'bot error');
   });
+
+  expireOldSessions();
+  setInterval(() => expireOldSessions(), 6 * 3600 * 1000).unref?.();
+
+  // Outbound webhooks: subscribe external systems to gateway events.
+  loadSubscribers(process.env.WEBHOOK_SUBSCRIBERS || '');
+
+  // MCP servers: each connected server contributes agent tools.
+  if (process.env.MCP_SERVERS) {
+    loadMcpServers(process.env.MCP_SERVERS)
+      .then((tools) => logger.info({ tools: tools.length }, 'mcp tools registered'))
+      .catch((err) => logger.warn({ err: err.message }, 'mcp load failed'));
+  }
+
+  // Pinned turns ride along under the cached prefix on every prompt.
+  bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (uid) {
+      const block = pinnedBlock(uid);
+      if (block && ctx.session) ctx.session.pinnedBlock = block;
+    }
+    await next();
+  });
+
+  // Announce readiness to any subscribed system.
+  emit('gateway.started', { uptime_target: process.uptime() }).catch(() => {});
 
   return bot;
 }

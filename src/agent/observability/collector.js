@@ -14,7 +14,7 @@
 import { logger } from '../../logger.js';
 import {
   recordTurn, recordProviderCalls, recordToolCalls,
-  getTurn, callsForTurn, toolsForTurn,
+  getTurn, callsForTurn, toolsForTurn, clearTraceChildren,
 } from './store.js';
 import { priceFor } from './pricing.js';
 
@@ -52,6 +52,8 @@ export function collectRun(tracer, meta = {}) {
     startedAt: meta.startedAt ?? tracer?.t0 ?? Date.now(),
     finishedAt: meta.finishedAt ?? Date.now(),
     turns: meta.turns,
+    providerCalls: providerCallsFromSpans(spans, tracer?.t0),
+    toolCalls: toolCallsFromSpans(spans, tracer?.t0),
     ...summarize(spans),
   };
 
@@ -60,6 +62,11 @@ export function collectRun(tracer, meta = {}) {
     logger.warn({ traceId }, 'observability: turn record not persisted');
     return { turnId: null, traceId, rows: null, status: rec.status, costUsd: null };
   }
+
+  // The turn row upserts, but the per-call rows do not — re-collecting the
+  // same spans would append duplicates. A trace is collected once per run, so
+  // clear its children first; the insert order is span order either way.
+  clearTraceChildren(traceId);
 
   const calls = providerCallsFromSpans(spans, tracer?.t0);
   const tools = toolCallsFromSpans(spans, tracer?.t0);
@@ -79,26 +86,30 @@ export function collectRun(tracer, meta = {}) {
 /**
  * Classify a run's outcome from its spans, without trusting any single one.
  * Order matters: an abort declared after a successful close still means abort.
+ *
+ * Returns scalar counts. The collector names them distinctly from the
+ * providerCalls/toolCalls *arrays* recordTurn expects — a count silently
+ * landing where an array belongs is how a turn ends up with zero tool rows.
  */
 export function summarize(spans) {
   const out = {
     status: 'ok',
     errorKind: null,
     errorMessage: null,
-    approvals: 0,
-    providerCalls: 0,
-    toolCalls: 0,
-    retryAttempts: 0,
+    approvalCount: 0,
+    providerCallCount: 0,
+    toolCallCount: 0,
+    failedProviderCalls: 0,
     unknownSpans: 0,
   };
   for (const s of spans) {
     if (!KNOWN.has(s.type)) out.unknownSpans++;
     if (s.type === 'provider') {
-      out.providerCalls++;
-      if (!s.payload?.ok) out.retryAttempts++;
+      out.providerCallCount++;
+      if (!s.payload?.ok) out.failedProviderCalls++;
     }
-    if (s.type === 'tool') out.toolCalls++;
-    if (s.type === 'approval') out.approvals++;
+    if (s.type === 'tool') out.toolCallCount++;
+    if (s.type === 'approval') out.approvalCount++;
     if (s.type === 'error') {
       out.errorKind = s.payload?.kind || 'unknown';
       out.errorMessage = s.payload?.message ? String(s.payload.message) : null;

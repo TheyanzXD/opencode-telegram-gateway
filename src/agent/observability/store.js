@@ -223,9 +223,9 @@ export function recordTurn(rec) {
   const costs = rows.map((r) => costOf(r.model, r.usage));
   const totals = sumCosts(costs);
   // The turn has a known spend only if at least one call was priced. A
-  // best-effort partial number silently implies full coverage.
+  // best-effort partial number silently implies full coverage, and a zero
+  // would read as "free" — so unpriced turns are stored as NULL, not 0.
   const anyPriced = totals.pricedCalls > 0;
-  const allPriced = totals.pricedCalls === totals.calls && totals.calls > 0;
   const tokenTotals = rows.reduce(
     (a, r) => {
       const u = readUsage(r.usage);
@@ -263,7 +263,7 @@ export function recordTurn(rec) {
     priced_calls: totals.pricedCalls,
     provider_calls: rows.length,
     tool_calls: tools.length,
-    approvals: Number(rec.approvals) || 0,
+    approvals: Number(rec.approvalCount) || 0,
     retry_attempts: rows.reduce((a, r) => a + (Number(r.attempt) || 0), 0),
     tools: Object.keys(toolCounts).length ? JSON.stringify(toolCounts) : null,
     created_at: now,
@@ -332,26 +332,45 @@ const STMT_TOOL_INSERT = (db) => db.prepare(`
  * but it is the right *shape*: the tool that returned 40 KB into a 50 KB
  * context is charged for 80% of the input, and that tracks the real bill.
  * Unpriced turns propagate `null` rather than a fabricated 0.
+ *
+ * Input-token attribution is index-based: rows are inserted in span order, so
+ * the i-th call in this array is the i-th row for that trace+tool. Span
+ * identity is not carried by the Tracer, so this is the only stable anchor —
+ * and it means a re-collection with the same spans rewrites identical values.
  */
 export function recordToolCalls(traceId, toolCalls = [], providerCalls = []) {
   if (!toolCalls.length) return 0;
   const costs = providerCalls.map((r) => costOf(r.model, r.usage));
   const totals = sumCosts(costs);
   const promptUsd = totals.pricedCalls ? totals.promptUsd : null;
+  const promptTokens = totals.promptTokens > 0 ? totals.promptTokens : 0;
   const totalBytes = toolCalls.reduce((a, t) => a + (Number(t.bytes) || 0), 0);
+  // Rows already present for each (trace, tool), before this batch lands.
+  // Insert order is span order, so row index within a trace+tool identifies
+  // the call — the Tracer carries no per-span id to key on instead.
+  const hadByTool = new Map();
+  for (const t of toolCalls) {
+    const k = String(t.tool || '(unknown)');
+    if (hadByTool.has(k)) continue;
+    hadByTool.set(
+      k,
+      read((db) => db.prepare('SELECT COUNT(*) AS c FROM obs_tool_calls WHERE trace_id = ? AND tool = ?'), [String(traceId), k], [{ c: 0 }])[0]?.c || 0,
+    );
+  }
 
   let n = 0;
   for (const t of toolCalls) {
+    const name = String(t.tool || '(unknown)');
     const bytes = Number(t.bytes) || 0;
     const share = totalBytes > 0 ? bytes / totalBytes : 0;
     const costUsd = promptUsd === null ? null : round6(promptUsd * share);
     const params = {
       trace_id: String(traceId),
-      tool: String(t.tool || '(unknown)'),
+      tool: name,
       ok: t.ok ? 1 : 0,
       ms: Math.max(0, Number(t.ms) || 0),
       bytes: bytes || null,
-      input_tokens: null, // filled by attributeInput below
+      input_tokens: null, // stamped in the second pass
       cost_usd: costUsd,
       error_message: t.ok ? null : clip(t.errorMessage, 1000),
       started_at: Number(t.startedAt) || Date.now(),
@@ -359,33 +378,56 @@ export function recordToolCalls(traceId, toolCalls = [], providerCalls = []) {
     if (write(STMT_TOOL_INSERT, [params], 'recordToolCalls')) n++;
   }
   // Second pass: attribute input tokens by the same share, so the cost and the
-  // token count tell the same story.
-  if (totals.promptTokens > 0 && totalBytes > 0) {
+  // token count tell the same story. A share that rounds to zero tokens (a
+  // 1-byte result in a 100 KB context) still gets its cost — the dollar figure
+  // is exact where the token count cannot be.
+  if (promptTokens > 0 && totalBytes > 0) {
+    const counts = new Map(); // tool → how many of this batch have been stamped
     for (const t of toolCalls) {
-      const share = (Number(t.bytes) || 0) / totalBytes;
-      const tok = Math.round(totals.promptTokens * share);
-      if (tok > 0) attributeInputTokens(String(traceId), String(t.tool), tok);
+      const name = String(t.tool || '(unknown)');
+      const i = counts.get(name) || 0;
+      counts.set(name, i + 1);
+      const tok = Math.round(promptTokens * ((Number(t.bytes) || 0) / totalBytes));
+      if (tok <= 0) continue;
+      // This batch's i-th row for `name`, offset past any rows a previous
+      // collection of the same trace already left behind.
+      const row = read(
+        (db) => db.prepare('SELECT id, input_tokens FROM obs_tool_calls WHERE trace_id = ? AND tool = ? ORDER BY id ASC LIMIT 1 OFFSET ?'),
+        [String(traceId), name, (hadByTool.get(name) || 0) + i],
+        [],
+      )[0];
+      if (row && row.input_tokens !== tok) attributeInputTokens(row.id, tok);
     }
   }
   return n;
 }
 
-const STMT_ATTR_INPUT = (db) => db.prepare(`
-  UPDATE obs_tool_calls
-  SET input_tokens = ?
-  WHERE id = (
-    SELECT id FROM obs_tool_calls
-    WHERE trace_id = ? AND tool = ? AND input_tokens IS NULL
-    ORDER BY started_at ASC LIMIT 1
-  )
-`);
+const STMT_ATTR_INPUT_ID = (db) => db.prepare('UPDATE obs_tool_calls SET input_tokens = ? WHERE id = ?');
 
-/** Stamp an attributed input-token count onto the oldest matching row. */
-function attributeInputTokens(traceId, tool, tokens) {
-  write(STMT_ATTR_INPUT, [tokens, traceId, tool], 'attributeInputTokens');
+/** Stamp an attributed input-token count onto a specific row. */
+function attributeInputTokens(id, tokens) {
+  write(STMT_ATTR_INPUT_ID, [tokens, id], 'attributeInputTokens');
 }
 
 // ---------------------------------------------------------------- reads
+
+/**
+ * Drop a trace's per-call rows. The turn row upserts; the children do not, so a
+ * re-collection clears them first to stay idempotent. Cascades would do this
+ * for a delete; this keeps the turn and rebuilds only its children.
+ */
+export function clearTraceChildren(traceId) {
+  write(
+    (db) => db.prepare('DELETE FROM obs_provider_calls WHERE trace_id = ?'),
+    [String(traceId)],
+    'clearTraceChildren.calls',
+  );
+  write(
+    (db) => db.prepare('DELETE FROM obs_tool_calls WHERE trace_id = ?'),
+    [String(traceId)],
+    'clearTraceChildren.tools',
+  );
+}
 
 /** Decorate raw turn rows with the shape the API/tools return. */
 function shapeTurn(r) {

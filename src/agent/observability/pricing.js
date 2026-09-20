@@ -135,9 +135,8 @@ function candidates(modelId) {
   const undated = base.replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/, '');
   // the segment after the last "/" — "myprovider/gpt-4o-mini" → "gpt-4o-mini"
   const last = (undated.includes('/') ? undated.split('/').pop() : undated) || undated;
-  const lastBase = (base.includes('/') ? base.split('/').pop() : base) || base;
 
-  for (const c of [lower, base, undated, last, lastBase, last.replace(/-[0-9]{8}$/, '')]) {
+  for (const c of [lower, base, undated, last]) {
     if (c && !out.includes(c)) out.push(c);
   }
   return out;

@@ -5,6 +5,11 @@ import { selectSkills, skillBlock, loadSkills } from '../../agent/skills.js';
 import { ensureUser, persistTurn, currentSessionId, loadHistory } from '../../conversation.js';
 import { buildStableMessages, runtimeContext } from '../../agent/context.js';
 import { recordUsage } from '../../db.js';
+import { remainingQuota } from '../commands/usage.js';
+import {
+  replyContext, rememberAnswer, regenKeyboard, stopKeyboard,
+  abortControllerFor, releaseAbortController,
+} from '../features/threads.js';
 import { logger } from '../../logger.js';
 import { splitLong, toTelegramMarkdown } from '../../format.js';
 
@@ -26,10 +31,13 @@ async function collectMedia(ctx) {
   return out;
 }
 
-async function sendReply(ctx, text, parseMode = 'Markdown') {
+async function sendReply(ctx, text, parseMode = 'Markdown', replyMarkup = undefined) {
   for (const part of splitLong(text)) {
     try {
-      await ctx.reply(part, parseMode ? { parse_mode: parseMode } : {});
+      await ctx.reply(part, {
+        ...(parseMode ? { parse_mode: parseMode } : {}),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
     } catch {
       await ctx.reply(part);
     }
@@ -67,6 +75,11 @@ async function handlePrompt(ctx, userText, media) {
   const chatId = ctx.chat.id;
   const sessionId = currentSessionId(user.user_id);
 
+  const left = remainingQuota(user.user_id);
+  if (left != null && left <= 0) {
+    return ctx.reply('⛔ Daily token quota reached. Resets at 00:00 UTC. Ask the operator to raise it: /quota');
+  }
+
   if (media.length) {
     const hasVision = config.vision.provider && config.vision.model;
     if (!hasVision && !modelSupportsVision(user.provider, user.model)) {
@@ -91,6 +104,19 @@ async function handlePrompt(ctx, userText, media) {
   const memText = memoryBlock(user.user_id);
   if (memText) messages.splice(1, 0, { role: 'system', content: memText });
 
+  // Pinned turns: load-bearing instructions the user marked to keep.
+  const pinText = ctx.session?.pinnedBlock;
+  if (pinText) messages.splice(1, 0, { role: 'system', content: pinText });
+
+  // A reply to an older message carries the turns around it as context.
+  const ctxMsgs = ctx.threads?.replyContext(sessionId);
+  if (ctxMsgs?.length) {
+    messages.splice(messages.length - 1, 0,
+      { role: 'system', content: 'Context the user replied to (continue from here):' },
+      ...ctxMsgs,
+    );
+  }
+
   autoLearn(user.user_id, userText, '');
   if (media.length) {
     messages[messages.length - 1] = {
@@ -103,8 +129,11 @@ async function handlePrompt(ctx, userText, media) {
   }
 
   if (config.streaming) {
-    const replyMsg = await ctx.reply(PLACEHOLDER);
-    return streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId });
+    const replyMsg = await ctx.reply(PLACEHOLDER, { reply_markup: stopKeyboard() });
+    const ac = abortControllerFor(chatId);
+    rememberAnswer(chatId, replyMsg.message_id, userText, media);
+    return streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal: ac.signal })
+      .finally(() => releaseAbortController(chatId));
   } else {
     await ctx.api.sendChatAction(ctx.chat.id, 'typing');
     try {
@@ -115,7 +144,8 @@ async function handlePrompt(ctx, userText, media) {
       });
       persistTurn(user.user_id, userText, content, usage, sessionId);
       recordUsage({ user_id: user.user_id, provider, model, usage });
-      await sendReply(ctx, toTelegramMarkdown(content) || '(empty)');
+      rememberAnswer(chatId, ctx.message?.message_id, userText, media);
+      await sendReply(ctx, toTelegramMarkdown(content) || '(empty)', undefined, regenKeyboard(ctx.message?.message_id));
     } catch (err) {
       logger.error({ err: err.message }, 'chat error');
       await ctx.reply(`❌ ${err.message}`);
@@ -123,7 +153,7 @@ async function handlePrompt(ctx, userText, media) {
   }
 }
 
-async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId }) {
+async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal }) {
   const { withEmptyResponseGuard } = await import('../../agent/guards.js');
   let buf = '';
   let lastEdit = 0;
@@ -137,7 +167,7 @@ async function streamReply(ctx, replyMsg, { provider, model, messages, user, cha
   };
   try {
     await withEmptyResponseGuard({
-      signal: null,
+      signal: signal || null,
       openStream: () => streamChatCompletion({
         provider, model, messages, chatId,
         temperature: user.temperature ?? config.defaults.temperature,
@@ -162,6 +192,10 @@ async function streamReply(ctx, replyMsg, { provider, model, messages, user, cha
       },
     });
   } catch (err) {
+    if (err?.name === 'AbortError' || signal?.aborted) {
+      await flush(buf || '(stopped)');
+      return;
+    }
     logger.error({ err: err.message }, 'stream error');
     await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, `❌ ${err.message}`.slice(0, 4000)).catch(() => {});
   }

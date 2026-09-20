@@ -15,6 +15,7 @@
 // stays byte-identical and the cache still hits.
 
 import { logger } from '../logger.js';
+import { soulMessage } from './personality.js';
 
 const DEFAULT_MAX_CHARS = 24_000;   // soft budget for visible history, in characters
 const SUMMARY_MARKER = '[summary]';
@@ -129,7 +130,12 @@ export async function buildStableMessages(user, currentTurn, opts = {}) {
   const history = (opts.history || []).map((m) => ({ role: m.role, content: m.content }));
   const compressed = await compressContext(history, { summarize: opts.summarize });
 
-  const out = [{ role: 'system', content: systemPrompt }];
+  // The soul is the deepest instruction: a user-editable personality that
+  // outranks the default system prompt. /soul.md is the interface for it.
+  const soul = opts.soul ?? (await soulMessage(user.user_id));
+  const base = soul?.content?.trim()?.length >= 8 ? soul.content : systemPrompt;
+
+  const out = [{ role: 'system', content: base }];
   if (runtime) out.push({ role: 'system', content: runtime });
   out.push(...compressed, { role: 'user', content: currentTurn });
   return out;
