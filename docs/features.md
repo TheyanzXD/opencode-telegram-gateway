@@ -282,3 +282,27 @@ valid, and re-parses the result to prove the edit did not break the file. A
 name inside a comment or string literal stays untouched — that is the point.
 JSX/TSX is refused with a pointer to `edit_file` (acorn cannot parse it
 without the JSX plugin).
+
+## oh-my-pi port: agent tooling
+
+The ideas behind can1357/oh-my-pi, recoded as native Node tools. Not vendored —
+the Rust layer (pi-natives, tree-sitter, brush shell) is not portable; the
+behavior is.
+
+- `read_pro` — one path for files, directories, ZIP/ TAR archives, SQLite, and
+  PDF. Auto-picks the reader from the extension.
+- `read_summary` — a file's outline (declarations + section headers + line
+  numbers) instead of the file itself.
+- `ast_grep` — structural search, not text. `$NAME` captures a node, `$$$ARGS`
+  matches zero-or-more, `$_` matches without binding. JS/TS via acorn.
+- `repl` — a stateful Node or Python session. Variables survive between calls.
+- `checkpoint` / `rewind` / `drop_checkpoint` — snapshot the workspace before a
+  risky change, restore it after. Investigation pattern, not undo history.
+- `context_notes` — a scratchpad that survives compression.
+- `think` — private reasoning that never reaches the user.
+- `security_scan` — static review of the user's code: secrets, command/SQL
+  injection, eval, TLS verification off, plaintext protocols, weak hashes.
+- `github` — repo, issues, PRs, code search, Actions runs — no gh CLI needed.
+- `tts` — voice output via a provider audio model. Degrades honestly when
+  unset.
+

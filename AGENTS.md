@@ -162,6 +162,29 @@ The closest thing to host mutation from chat, outside `/agent`, is `/model add`
 (writes `providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
 touch only project files.
 
+## oh-my-pi tools (ported, not vendored)
+
+The useful behaviors of can1357/oh-my-pi, recoded as native Node ESM tools.
+The Rust layer is not portable; the ideas are.
+
+- `read_pro(path, [offset, limit, query, table])` — files, dirs, archives,
+  SQLite, PDF from one entry point.
+- `read_summary(file)` — the outline of a file, not the file.
+- `ast_grep(pat, [path])` — structural search: `$NAME` captures one node,
+  `$$$ARGS` zero-or-more, `$_` matches without binding. Repeated `$NAME` must
+  match identical code. A parse failure is a query problem — check the pattern.
+- `repl(lang: node|python, code, [restart])` — stateful session; state survives
+  between calls. Blocks on input() or a server loop — the call times out at 20s
+  and says so.
+- `checkpoint(label)` / `rewind(report)` / `drop_checkpoint` — snapshot before
+  a risky edit, restore after. Use `rewind` with a report of what was tried.
+- `context_notes(action: add|list|clear, text)` — survives context compression.
+- `think(thought)` — private reasoning; the user never sees it.
+- `security_scan(path)` — static review of the user's code. Absence of findings
+  is not a clean bill of health.
+- `github(action, repo, [number, query])` — repo/issues/prs/code/runs/commits.
+- `tts(text, [voice])` — voice output when a provider audio model is set.
+
 ## Code intelligence and media
 
 `code-intel.js` + `embeddings.js` are the code-understanding layer. They are

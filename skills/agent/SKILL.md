@@ -5,7 +5,7 @@ when: agent|tools|tool list|what can you do
 version: 1.0
 ---
 
-The agent has 66 tools. Grouped by what they do; read-only ones do not need
+The agent has 78 tools. Grouped by what they do; read-only ones do not need
 approval, mutating ones do.
 
 **Shell & execution**

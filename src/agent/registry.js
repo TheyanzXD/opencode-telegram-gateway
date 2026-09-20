@@ -18,6 +18,14 @@ import { parityTools } from './tools/opencode-parity.js';
 import { askUserTool } from './tools/ask-user.js';
 import { liveShareTools } from './tools/live-share.js';
 import { codeIntelTools } from './tools/code-intel.js';
+import { readProTools } from './tools/read-pro.js';
+import { sessionProTools } from './tools/session-pro.js';
+import { voiceTools } from './tools/voice.js';
+import { githubTools } from './tools/github-ops.js';
+import { securityScanTools } from './tools/security-scan.js';
+import { replTools } from './tools/repl.js';
+import { thinkTools } from './tools/think.js';
+import { astGrepTools } from './tools/ast-grep.js';
 import { mediaTools } from './tools/media.js';
 
 export class ToolRegistry {
@@ -89,5 +97,8 @@ export function createDefaultRegistry() {
     ...subagentTools, ...observabilityTools, sysinfoTool,
     ...parityTools, askUserTool, ...liveShareTools,
     ...codeIntelTools, ...mediaTools,
+    ...readProTools, ...sessionProTools, ...voiceTools,
+    ...githubTools, ...securityScanTools, ...replTools,
+    ...thinkTools, ...astGrepTools,
   ]);
 }

@@ -310,3 +310,6 @@ node --test tests/
 ## License
 
 MIT.
+
+- Code intelligence: RAG search, AST symbols, dependency graph, dead code, image generation
+- oh-my-pi tooling, recoded native: read_pro (files/archives/SQLite/PDF), read_summary, ast_grep structural search, stateful REPL, checkpoint/rewind, context_notes, think, security_scan, GitHub ops, TTS
