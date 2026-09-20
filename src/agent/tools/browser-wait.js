@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 import { logger } from '../../logger.js';
-import { truncate } from './browser-refs.js';
+import { truncate, tidy } from './browser-refs.js';
 
 const MAX_CONDITIONS = 3;
 const MAX_TEXT = 4000;

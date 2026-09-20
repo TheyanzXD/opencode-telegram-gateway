@@ -23,7 +23,7 @@ import {
 import { onInlineQuery, onEditedMessage, sessionForTopic } from './features/inline.js';
 import { setLanguage, languageFor, supportedLanguages, t } from './features/i18n.js';
 import {
-  startWebhook, healthHandler, startWatchdog, installReloadHooks, touchActivity,
+  startWebhook, healthHandler, startHealthServer, startWatchdog, installReloadHooks, touchActivity,
 } from './health.js';
 import { langCommand, keyCommand } from './commands/account.js';
 import { soulCommand } from './commands/soul.js';
@@ -136,6 +136,8 @@ export function createBot() {
       return bot;
     });
   }
+  // polling mode: health on its own port so a probe still has something to hit
+  if (process.env.HEALTH_PORT !== '0') startHealthServer();
 
   bot.catch((err) => {
     logger.error({ err: err.message, ctx: err.ctx?.update?.update_id }, 'bot error');

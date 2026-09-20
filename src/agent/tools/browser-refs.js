@@ -163,11 +163,15 @@ export async function resolvePageAndTarget(chatId, kind, target) {
   }
   const page = await getPage(chatId);
   if (!page || page.isClosed?.()) return { err: 'the browser page is closed — call browser_navigate first' };
-  if (!target) return { err: 'a target is required' };
-  const r = resolveAdvancedRef(chatId, kind, target);
-  if (r.err) return { err: r.err };
-  if (!r.sel) return { err: `could not resolve target: ${target}` };
-  return { page, sel: r.sel };
+  if (target) {
+    // optional: a tool with nothing to aim at (a bare keypress on whatever the
+    // page focused) has no target, and must not be rejected for omitting one
+    const r = resolveAdvancedRef(chatId, kind, target);
+    if (r.err) return { err: r.err };
+    if (!r.sel) return { err: `could not resolve target: ${target}` };
+    return { page, sel: r.sel };
+  }
+  return { page, sel: null };
 }
 
 /** Truncate a string for the tool result, marking the cut. */

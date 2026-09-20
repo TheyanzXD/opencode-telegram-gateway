@@ -14,12 +14,34 @@ import { logger } from '../logger.js';
 import { proxyStatsLog as proxyStats } from '../proxy/pool.js';
 import { degradationReport } from '../providers/fallback.js';
 import { db } from '../db.js';
+import http from 'node:http';
 
 let _startedAt = Date.now();
 let _lastActivity = _startedAt;
 let _watchTimer = null;
 
 export function touchActivity() { _lastActivity = Date.now(); }
+
+/**
+ * A standalone health server, for polling mode.
+ *
+ * grammy owns the webhook port in webhook mode and does not expose a route for
+ * anything else, so in polling mode this binds its own tiny listener. Either
+ * way GET /health answers the same JSON.
+ *
+ * @param {number} port defaults to HEALTH_PORT or 8080
+ */
+export function startHealthServer(port) {
+  const p = Number(port || process.env.HEALTH_PORT || 8080);
+  const server = http.createServer(healthHandler);
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') logger.warn({ port: p }, 'health port busy — /health unavailable, continuing');
+    else logger.warn({ err: err.message }, 'health server error');
+  });
+  server.listen(p, () => logger.info({ port: p }, 'health endpoint on GET /health'));
+  server.unref?.();
+  return server;
+}
 
 /**
  * Start a webhook server. grammy can drive webhooks directly; this module
@@ -42,7 +64,7 @@ export async function startWebhook(bot, opts = {}) {
       secretToken: secret,
       // grammy sets the Telegram webhook itself when domain+path are given
     },
-    onStart: (info) => logger.info({ username: info.username, port, path }, 'webhook online'),
+    onStart: (info) => logger.info({ username: info.username, port, path, health: 'GET /health' }, 'webhook online'),
   });
   return { port, path, hookUrl };
 }
