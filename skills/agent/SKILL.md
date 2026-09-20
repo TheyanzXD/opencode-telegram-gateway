@@ -5,7 +5,7 @@ when: agent|tools|tool list|what can you do
 version: 1.0
 ---
 
-The agent has 50 tools. Grouped by what they do; read-only ones do not need
+The agent has 58 tools. Grouped by what they do; read-only ones do not need
 approval, mutating ones do.
 
 **Shell & execution**
@@ -25,6 +25,11 @@ approval, mutating ones do.
 - `run_tests` — auto-detects pytest/jest/go/cargo
 - `compile_run` — rustc/go/gcc with line:column errors
 - `send_document` — deliver a workspace file to the chat
+
+**Finding things**
+- `grep` — regex across the workspace; ripgrep when present, a JS fallback
+  when not. `path:line:match` output, capped
+- `glob` — files by name pattern, newest first, node_modules excluded
 
 **Memory & knowledge**
 - `remember` / `recall` / `forget` — durable facts across /reset and restart
@@ -46,6 +51,16 @@ approval, mutating ones do.
 **Observability**
 - `trace_export` — the full trace of a turn as JSON/Markdown/text
 - `cost_report` — spend breakdown per model and per tool
+
+**Port forwarding** (like VS Code)
+- `tunnel_open` / `tunnel_list` / `tunnel_close` — give a localhost server a
+  URL the user can open. Relay URLs carry a secret path token; an open port is
+  not a reachable service
+
+**Talking to the human**
+- `ask_user` — stop and wait for an answer. Choice buttons or a typed reply.
+  Use it instead of guessing when the decision is theirs
+- `todowrite` / `todoread` — the session task list, visible as /todo
 
 Choose by blast radius: read first (`read_file`, `list_dir`, `browser_read`),
 then act (`multi_edit` over repeated `edit_file`, `job_start` for anything

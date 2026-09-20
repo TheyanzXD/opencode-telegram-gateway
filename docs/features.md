@@ -149,3 +149,36 @@ that contains an auth header is how keys leak; this is the filter that stops it.
 A turn that fails *every* model in the fallback chain is not dropped. It is
 written to the `dlq` table with its full request, so the operator can replay
 it once the provider is back instead of asking the user to retype it.
+
+## Port forwarding
+
+The agent runs something that listens on localhost — a dev server, a notebook,
+a storybook, a debugger — and it is useless without a URL. `tunnel_open` gives
+it one, the way VS Code forwards a port.
+
+| Tool | What it does |
+| --- | --- |
+| `tunnel_open` | Forward a localhost port. Returns a URL the user can open |
+| `tunnel_list` | Every forwarded port, its URL, and hit count |
+| `tunnel_close` | Stop forwarding. The local service keeps running |
+
+Two transports. In `local` mode (the user is on this machine — Termux, a dev
+box) the URL is `http://127.0.0.1:PORT` and nothing is spawned. In `relay`
+mode (a remote host) a TCP forwarder listens on a public port and splices it to
+`127.0.0.1:PORT` — protocol-agnostic, so websockets and HMR survive.
+
+Every relay URL carries a 128-bit secret path token. An open port is not the
+same as a reachable service: a request without the token gets a 401 before the
+first byte reaches the private service. `no_token` is refused in relay mode.
+
+The tool checks that something is actually listening before it forwards, so
+the failure message is actionable — "start the server first" instead of
+"connection refused" on the user's first click.
+
+## Asking the user
+
+`ask_user` stops the agent mid-task and waits for a human answer. It posts the
+question with either choice buttons or a "type an answer" affordance, and the
+turn resumes when the answer lands — a button tap or a typed reply, either
+works. A question unanswered for 30 minutes resolves to "proceed with your
+best judgment", so an unattended run does not hang.

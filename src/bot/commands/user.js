@@ -34,10 +34,14 @@ export async function helpCommand(ctx) {
 /reset — clear history (active session)
 /history — show last messages (active session)
 /sessions — conversation sessions${admin}
+/todo — the agent's task list (what it is doing, what's next)
 
 /agent <task> — tool-calling agent: shell, files, browser, web search
+   code tools: execute_python, execute_node, multi_edit, ast_edit, grep, glob
    browser tools: browser_navigate, browser_snapshot (@eN refs),
    browser_click, browser_type, browser_read, browser_search
+   tunneling: tunnel_open <port> — your local server gets a clickable URL
+   the agent can ask you a question mid-task — tap a button or type back
    destructive tools pause for an approval before running
 /abort — cancel the running /agent in this chat
 /tools — list every tool the agent can call

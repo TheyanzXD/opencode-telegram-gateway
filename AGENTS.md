@@ -200,10 +200,27 @@ See `docs/` for the deep dives.
 The bot grew past relay + agent. This is the map so you do not grep for it.
 
 **Commands** — `/usage`, `/quota` (admin), `/key`, `/lang`, `/soul`, `/pin`,
-`/search`, `/export`, plus the existing set. Full reference: `docs/features.md`.
+`/search`, `/export`, `/todo`, plus the existing set. Full reference:
+`docs/features.md`.
 
-**Agent tools** — 50 of them now. The catalog with blast radius:
+**Agent tools** — 58 of them now. The catalog with blast radius:
 `skills/agent/SKILL.md` (it is a skill so the model can look it up too).
+
+**Port forwarding.** `src/agent/tools/live-share.js` is VS Code's forward-a-port
+for a bot. Two transports: `local` (the user is on this machine — Termux, a dev
+box — so the URL is `http://127.0.0.1:PORT` and nothing is spawned) and `relay`
+(a remote host — a TCP forwarder is spawned, and every URL carries a 128-bit
+secret path token so an open port is not a reachable service). The relay is raw
+TCP, not HTTP-aware, which is what keeps websockets and HMR alive. A request
+without the token is 401'd before the first byte reaches the private service.
+`no_token` is refused in relay mode. The tool probes the port first, so the
+failure message says "start the server" instead of the user seeing a refused
+connection. `/todo` surfaces the todo tools without asking the agent.
+
+**Asking the user.** `src/agent/tools/ask-user.js` parks a deferred promise and
+resolves it from a Telegram callback or a typed reply. It reuses approvals.js
+for id creation and lookup but keeps its own answer map, because the value is a
+string, not a boolean. A 30-minute TTL means an unattended run does not hang.
 
 **New subsystems and their entry points**
 
@@ -226,7 +243,11 @@ src/bot/commands/soul.js      /soul
 src/bot/commands/search.js    /pin + /search
 src/agent/observability/      trace store, collector, export, pricing
 src/agent/store-kv.js         the agent's own sqlite handle (lt_memory, lessons,
-                             decisions, scratchpad) — kept off db.js on purpose
+                             decisions, scratchpad, todos) — kept off db.js on purpose
+src/agent/tools/live-share.js  port forwarding (tunnel_open/list/close)
+src/agent/tools/ask-user.js    ask_user: blocks for a human answer
+src/agent/tools/opencode-parity.js  grep, glob, todowrite, todoread
+src/bot/commands/todo.js      /todo
 ```
 
 **Two databases.** `db.js` owns chat (users, messages, sessions, usage,
@@ -234,7 +255,10 @@ proxies). `store-kv.js` owns agent state (long-term memory, lessons,
 decisions, scratchpad, quota overrides, DLQ, pins). Separate handles mean a
 bad agent migration cannot take the chat tables down with it.
 
-**Approval gating.** `browser_click`, `browser_type`, `multi_edit`,
+**Approval gating.** The engine checks `isDangerous` **or**
+`requiresApproval(args)` — the second one is a per-call hook, so a tool can be
+conditionally dangerous (`browser_console` is safe to read but its `evaluate`
+runs arbitrary JS in the page). Gated: `browser_click`, `browser_type`, `multi_edit`,
 `ast_edit`, `write_file`, `edit_file`, `execute_bash`, `git`, `compile_run`
 are `isDangerous`. The guardian pre-screens; clearly-safe ones skip the
 keyboard, anything unsure still asks. `/yolo` disables the gate entirely and

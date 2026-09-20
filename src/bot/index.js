@@ -28,6 +28,8 @@ import {
 import { langCommand, keyCommand } from './commands/account.js';
 import { soulCommand } from './commands/soul.js';
 import { pinCommand, searchCommand } from './commands/search.js';
+import { todoCommand } from './commands/todo.js';
+import { answerCallback, answerByText } from '../agent/tools/ask-user.js';
 import { loadSubscribers, emit } from './features/webhooks.js';
 import { pinnedBlock } from './features/pinned.js';
 import { loadMcpServers, allMcpTools } from '../mcp/client.js';
@@ -87,6 +89,7 @@ export function createBot() {
   // Commands
   bot.command('start', startCommand);
   bot.command('help', helpCommand);
+  bot.command('todo', todoCommand);
   bot.command('model', modelCommand);
   bot.command('models', modelsCommand);
   bot.command('temperature', temperatureCommand);
@@ -115,6 +118,12 @@ export function createBot() {
   bot.command('pin', pinCommand);
   bot.command('search', searchCommand);
   // account: language switch + bring-your-own-key
+  bot.on('callback_query', async (ctx) => {
+    const data = ctx.callbackQuery?.data || '';
+    if (data.startsWith('answer:')) return answerCallback(ctx);
+    return true;
+  });
+
   bot.on('inline_query', onInlineQuery);
   bot.on('edited_message', onEditedMessage);
 

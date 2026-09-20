@@ -12,6 +12,7 @@ import {
 } from '../features/threads.js';
 import { logger } from '../../logger.js';
 import { splitLong, toTelegramMarkdown } from '../../format.js';
+import { answerByText } from '../../agent/tools/ask-user.js';
 
 const PLACEHOLDER = '…';
 
@@ -47,6 +48,9 @@ async function sendReply(ctx, text, parseMode = 'Markdown', replyMarkup = undefi
 export async function onText(ctx) {
   const text = ctx.message.text || '';
   if (text.startsWith('/')) return; // commands handled elsewhere
+  // If the agent asked a question and the user typed instead of tapping a
+  // button, this is the answer. Consume it and stay out of the normal path.
+  if (answerByText(ctx.chat?.id ?? ctx.from?.id, text)) return;
   if (text.length > config.maxInputChars) {
     return ctx.reply(`⚠️ Message too long (${text.length}/${config.maxInputChars}).`);
   }

@@ -12,6 +12,9 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS). Authenticated premium proxies (`user:pass@ip:port`) load from a local gitignored file via `PROXY_PREMIUM_FILE`.
 - 🖥 **Headless browser as agent tools** — `/agent` drives a real anti-detect browser itself: `browser_navigate`, `browser_snapshot` (stable `@eN` element refs), `browser_click`, `browser_type`, `browser_read`, `browser_search`. One Camoufox session per chat. Same pattern as Hermes Agent — the model calls the tools, no `/browse` command to paste.
 - 🤖 **Agent mode** — `/agent <task>` runs a tool-calling loop: `execute_bash`, `read/write/edit_file`, `list_dir`, `sysinfo`, `web_search`, `fetch_url`. Destructive tools pause for a one-tap approval (inline keyboard), progress streams into one message. Off by default (`AGENT_ENABLED=true` to enable). See [docs/agent.md](docs/agent.md).
+- 🔌 **Port forwarding** — the agent runs a dev server, a notebook, a debugger in its own workspace and `tunnel_open` hands you a URL. Relay mode on a remote host carries a 128-bit secret path token, so an open port is not a reachable service. Websockets and HMR survive — the relay is TCP, not HTTP. The VS Code feature, for a bot.
+- ❓ **Asks you mid-task** — `ask_user` stops and waits for a human answer: choice buttons, or type back. An unanswered question resolves to "proceed with best judgment" after 30 min, so nothing hangs.
+- 📋 **Task list** — `todowrite`/`todoread` track multi-step work; `/todo` shows it without asking the agent.
 - 🐛 **Self-healing debugger** — every error is classified (network / timeout / auth / rate-limit / syntax / missing-module), retryable ones retry in-place up to 2× per turn honoring `Retry-After`, and each run leaves a `/debug` trace of provider calls, tool calls, and approvals.
 - 🧩 **Plugins** — drop a `.js` file into `plugins/` to add tools, middleware, or a message hook. One broken plugin is skipped, not fatal. See [docs/plugins.md](docs/plugins.md).
 - 🛡 **Rate limiting** — sliding window per user (`RATE_LIMIT_PER_MINUTE`), admins exempt.
@@ -89,7 +92,7 @@ Premium entries are seeded ahead of the public lists, so per-chat rotation prefe
 Each is a directory with a `SKILL.md` frontmatter (`name`, `description` ≤ 60
 chars, `when` patterns). Four ship with the repo:
 
-- **agent-tools** — the 50-tool catalog with blast radius
+- **agent-tools** — the 58-tool catalog with blast radius
 - **camoufox-antidetect** — browser blocks, known walls, session rules
 - **context-budget** — where the tokens go and how the cache stays warm
 - **telegram-markdown** — MarkdownV2 escaping rules
@@ -123,10 +126,15 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /model add <p/m>     Register a new model (admin) — e.g. /model add groq/new-model 128000
 /models              List every registered model
 /agent <task>         Tool-calling agent — shell, files, browser, web search
+                       code tools: execute_python, execute_node, multi_edit,
+                       ast_edit, grep, glob
                        browser tools: browser_navigate, browser_snapshot
                        (@eN refs), browser_click, browser_type, browser_read,
                        browser_search — see docs/agent.md
+                       tunneling: tunnel_open <port> — your local server gets
+                       a clickable URL
 /abort                Cancel the running /agent in this chat
+/todo                 The agent's task list
 /tools                List every tool the agent can call
 /yolo on|off          Auto-approve dangerous tools (skip the keyboard)
 /estop                Emergency stop — cancel everything now

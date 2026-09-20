@@ -15,6 +15,8 @@ import { browserAdvancedTools } from './tools/browser-advanced.js';
 import { observabilityTools } from './tools/observability.js';
 import { sysinfoTool } from './tools/sysinfo.js';
 import { parityTools } from './tools/opencode-parity.js';
+import { askUserTool } from './tools/ask-user.js';
+import { liveShareTools } from './tools/live-share.js';
 
 export class ToolRegistry {
   constructor(tools = []) {
@@ -83,6 +85,6 @@ export function createDefaultRegistry() {
     bashTool, ...fsTools, ...searchTools, ...browserTools,
     ...browserAdvancedTools, ...execTools, ...fileTools, ...memoryTools,
     ...subagentTools, ...observabilityTools, sysinfoTool,
-    ...parityTools,
+    ...parityTools, askUserTool, ...liveShareTools,
   ]);
 }
