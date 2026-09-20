@@ -7,6 +7,9 @@ import { bashTool } from './tools/bash.js';
 import { fsTools } from './tools/fs.js';
 import { searchTools } from './tools/search.js';
 import { browserTools } from './tools/browser.js';
+import { execTools } from './tools/execute.js';
+import { fileTools } from './tools/files.js';
+import { memoryTools } from './tools/memory.js';
 import { sysinfoTool } from './tools/sysinfo.js';
 
 export class ToolRegistry {
@@ -73,6 +76,7 @@ export class ToolRegistry {
 
 export function createDefaultRegistry() {
   return new ToolRegistry([
-    bashTool, ...fsTools, ...searchTools, ...browserTools, sysinfoTool,
+    bashTool, ...fsTools, ...searchTools, ...browserTools,
+    ...execTools, ...fileTools, ...memoryTools, sysinfoTool,
   ]);
 }

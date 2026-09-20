@@ -7,6 +7,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { config } from '../../config.js';
 import { logger } from '../../logger.js';
+import { workspaceFor } from '../workspace.js';
 
 const schema = z.object({
   command: z.string().min(1, 'command is required').max(4096),
@@ -42,12 +43,12 @@ export const bashTool = {
     additionalProperties: false,
   },
   schema,
-  async execute({ command, cwd }) {
+  async execute({ command, cwd }, ctx = {}) {
     for (const re of BANNED) if (re.test(command)) {
       return { stdout: '', stderr: `refused: command matches a blocked pattern (${re.source})`, code: 126 };
     }
 
-    const root = config.agent?.workspace || process.cwd();
+    const root = workspaceFor(ctx.userId ?? ctx.chatId);
     const workdir = cwd ? path.resolve(root, cwd) : root;
     if (!workdir.startsWith(root)) {
       return { stdout: '', stderr: `refused: cwd escapes the workspace (${root})`, code: 126 };

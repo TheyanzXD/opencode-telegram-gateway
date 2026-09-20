@@ -7,12 +7,12 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { z } from 'zod';
-import { config } from '../../config.js';
+import { workspaceFor } from '../workspace.js';
 
 const MAX_READ = 200 * 1024; // 200 KB into context; larger needs an explicit range
 
-function safe(p) {
-  const root = config.agent?.workspace || process.cwd();
+function safe(p, ctx = {}) {
+  const root = workspaceFor(ctx.userId ?? ctx.chatId);
   const abs = path.resolve(root, p);
   if (!abs.startsWith(root)) {
     return null; // escapes the workspace — refuse instead of throwing
@@ -67,8 +67,8 @@ export const fsTools = [
       additionalProperties: false,
     },
     schema: readSchema,
-    async execute({ path: p, start_line, end_line }) {
-      const abs = safe(p);
+    async execute({ path: p, start_line, end_line }, ctx = {}) {
+      const abs = safe(p, ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
       const stat = await fs.stat(abs);
       if (stat.isDirectory()) return `is a directory: ${p}`;
@@ -89,8 +89,8 @@ export const fsTools = [
       additionalProperties: false,
     },
     schema: writeSchema,
-    async execute({ path: p, content }) {
-      const abs = safe(p);
+    async execute({ path: p, content }, ctx = {}) {
+      const abs = safe(p, ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, content, 'utf8');
@@ -113,13 +113,13 @@ export const fsTools = [
       additionalProperties: false,
     },
     schema: editSchema,
-    async execute(args) {
+    async execute(args, ctx = {}) {
       // `new` is a reserved word in a binding position — read it by key
       const p = args.path;
       const old = args.old;
       const neu = args['new'];
       const replace_all = args.replace_all;
-      const abs = safe(p);
+      const abs = safe(p, ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
       const text = await fs.readFile(abs, 'utf8');
       const occurrences = text.split(old).length - 1;
@@ -143,8 +143,8 @@ export const fsTools = [
       additionalProperties: false,
     },
     schema: listSchema,
-    async execute({ path: p }) {
-      const abs = safe(p ?? '.');
+    async execute({ path: p }, ctx = {}) {
+      const abs = safe(p ?? '.', ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
       const entries = await fs.readdir(abs, { withFileTypes: true });
       return entries
