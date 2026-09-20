@@ -135,7 +135,11 @@ export class AgentEngine {
         }
 
         const tool = this.registry.get(name);
-        if (tool?.isDangerous) {
+        // A tool is gated when it is dangerous, or when this specific call hits a
+        // dangerous path — browser_console is read-only, but its `evaluate` runs
+        // arbitrary JS in the page and must not slip past the gate.
+        const dangerous = tool?.isDangerous || (typeof tool?.requiresApproval === 'function' && tool.requiresApproval(args));
+        if (dangerous) {
           // Ask the guardian (cheap model) whether a human needs to look at this.
           // Unavailable or unsure → null → gateDecision falls back to 'ask'.
           const verdict = await guardianVerdict(name, args);

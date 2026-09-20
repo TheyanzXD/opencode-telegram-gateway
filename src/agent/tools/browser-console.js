@@ -74,9 +74,11 @@ export const browserConsole = {
   name: 'browser_console',
   description:
     'Read the browser page\'s console: JS errors, warnings, and failed network requests since the session began. Default level is "error" — the errors that break a page without showing anything on screen. Pass grep to filter (substring or /regex/), clear:true to wipe the buffer after reading. With evaluate: a JS expression runs in the page and its result comes back as JSON — use it to inspect live DOM state ("document.querySelectorAll(\'button\').length", "window.__APP_STATE__"). Read-only except evaluate, which runs arbitrary JS in the page.',
-  isDangerous: false, // reading console messages observes the page; the
-                     // evaluate path is the one that mutates, and its calls
-                     // are gated by the engine's own dangerous-tool check
+  isDangerous: false, // reading console messages observes the page. The
+                     // evaluate path is the one that mutates; it is gated
+                     // per call by requiresApproval below instead of flagging
+                     // the whole tool, so a plain console read stays cheap.
+  requiresApproval: (args) => !!(args && args.evaluate),
   parameters: {
     type: 'object',
     properties: {

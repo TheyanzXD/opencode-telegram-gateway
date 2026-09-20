@@ -141,6 +141,7 @@ export const browserNavigate = {
 const readSchema = z.object({
   selector: z.string().optional(),
   max_chars: z.number().int().positive().max(20_000).optional(),
+  frame: z.string().optional(),
 });
 
 export const browserRead = {
@@ -152,23 +153,29 @@ export const browserRead = {
     properties: {
       selector: { type: 'string', description: 'Optional: restrict to one element (@eN ref or selector)' },
       max_chars: { type: 'number', description: 'Cap on returned characters (default 12000)' },
+      frame: { type: 'string', description: 'Optional: an iframe name from browser_tabs (frames) — reads inside that frame instead of the top document' },
     },
     required: [],
     additionalProperties: false,
   },
   schema: readSchema,
-  async execute({ selector, max_chars }, ctx = {}) {
+  async execute({ selector, max_chars, frame }, ctx = {}) {
     const chatId = ctx.chatId ?? 0;
     const cap = max_chars ?? MAX_TEXT;
     const page = await getPage(chatId);
+    if (!page) return '⚠️ no browser session for this chat — call browser_navigate first';
+    // A frame name swaps the document being read. An unknown name is an error,
+    // not a silent read of the top page — that would look like a success.
+    const doc = frame ? (page.frame?.(frame) || page.frames?.().find((f) => f !== page && String(f.url()).includes(frame)) || null) : page;
+    if (!doc) return `⚠️ no iframe named or matching "${frame}" on this page`;
     if (!selector) {
-      const text = (await page.innerText('body').catch(() => ''))
+      const text = (await doc.innerText('body').catch(() => ''))
         .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
       return text.slice(0, cap) + (text.length > cap ? `\n\n…[truncated, ${text.length - cap} chars left — call again with a selector to read the rest]` : '');
     }
     const t = resolveTarget(chatId, selector);
     if (t.err) return `⚠️ ${t.err}`;
-    const text = await page.locator(t.sel).innerText().catch(() => '');
+    const text = await doc.locator(t.sel).innerText().catch(() => '');
     return String(text).slice(0, cap);
   },
 };
