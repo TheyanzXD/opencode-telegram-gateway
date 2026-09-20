@@ -9,7 +9,8 @@
 import { requestJson } from '../providers/client.js';
 import { getProvider } from '../providers/store.js';
 import { createDefaultRegistry } from './registry.js';
-import { createApproval } from './approvals.js';
+import { createApproval, gateDecision } from './approvals.js';
+import { guardianVerdict } from './approval-smart.js';
 import { analyze } from '../debugger/error-analyzer.js';
 import { Tracer } from '../debugger/tracer.js';
 import { logger } from '../logger.js';
@@ -135,21 +136,39 @@ export class AgentEngine {
 
         const tool = this.registry.get(name);
         if (tool?.isDangerous) {
-          const { id, promise } = createApproval(userId, name, args);
-          this.onEvent({ type: 'approvalRequired', id, tool: name, args });
-          const t0 = Date.now();
-          const approved = await promise;
-          this.tracer.approval(name, approved, Date.now() - t0);
-          if (!approved) {
-            const out = '⛔ denied by user';
+          // Ask the guardian (cheap model) whether a human needs to look at this.
+          // Unavailable or unsure → null → gateDecision falls back to 'ask'.
+          const verdict = await guardianVerdict(name, args);
+          const decision = gateDecision(userId, name, verdict);
+          this.tracer.span('gate', { tool: name, verdict, decision });
+
+          if (decision === 'allow') {
+            // yolo, or guardian judged it safe — run without a keyboard
+            this.onEvent({ type: 'toolStart', tool: name, args, autoApproved: true });
+          } else if (decision === 'deny') {
+            // denial breaker: the user has refused 3 in a row; stop asking
+            const out = '⛔ denied (approval fatigue — re-enable with /yolo off first)';
             this.onEvent({ type: 'toolEnd', tool: name, output: out, denied: true });
             this.tracer.toolCall(name, 0, false, out);
             convo.push(this.toolResult(call.id, name, out));
             continue;
+          } else {
+            const { id, promise } = createApproval(userId, name, args);
+            this.onEvent({ type: 'approvalRequired', id, tool: name, args });
+            const t0 = Date.now();
+            const approved = await promise;
+            this.tracer.approval(name, approved, Date.now() - t0);
+            if (!approved) {
+              const out = '⛔ denied by user';
+              this.onEvent({ type: 'toolEnd', tool: name, output: out, denied: true });
+              this.tracer.toolCall(name, 0, false, out);
+              convo.push(this.toolResult(call.id, name, out));
+              continue;
+            }
           }
+        } else {
+          this.onEvent({ type: 'toolStart', tool: name, args });
         }
-
-        this.onEvent({ type: 'toolStart', tool: name, args });
         const t0 = Date.now();
         const result = await this.registry.execute(name, args);
         const output = String(result.content).slice(0, MAX_TURN_CHARS);

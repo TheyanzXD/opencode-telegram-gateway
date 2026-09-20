@@ -11,8 +11,10 @@ import { sessionsCommand } from './commands/sessions.js';
 import {
   agentCommand, abortCommand, toolsCommand, approvalCallback,
 } from './commands/agent.js';
+import { yoloCommand, estopCommand } from './commands/agent-admin.js';
 import { debugCommand, pluginsCommand } from './commands/debug.js';
 import { pluginsLoader } from '../plugins/state.js';
+import { leaseMiddleware } from '../agent/turn-lease.js';
 import { browserSafe } from '../browser/tool.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
@@ -52,6 +54,8 @@ export function createBot() {
     maxPerMinute: config.agent.rateLimitPerMinute,
     windowMs: 60_000,
   }));
+  // typing indicator while a previous turn is still running in this chat
+  bot.use(leaseMiddleware());
 
   // Commands
   bot.command('start', startCommand);
@@ -70,6 +74,8 @@ export function createBot() {
   bot.command('agent', agentCommand);
   bot.command('abort', abortCommand);
   bot.command('tools', toolsCommand);
+  bot.command('yolo', yoloCommand);
+  bot.command('estop', estopCommand);
   bot.command('debug', debugCommand);
   bot.command('plugins', pluginsCommand);
   bot.callbackQuery(/^approve:/, approvalCallback);

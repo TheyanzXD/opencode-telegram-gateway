@@ -83,6 +83,18 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxies_fail ON proxies(fails, ok_count DESC);
+
+-- Cross-session memory: durable facts, one per row. Not conversation history.
+CREATE TABLE IF NOT EXISTS memory (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL,
+  fact        TEXT NOT NULL,
+  source      TEXT,
+  updated_at  INTEGER NOT NULL,
+  UNIQUE(user_id, fact)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_user ON memory(user_id, updated_at DESC);
 `);
 
 logger.info({ dbPath: config.dbPath }, 'database ready');

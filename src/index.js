@@ -1,6 +1,8 @@
 import { run, shutdown } from './bot/index.js';
 import { logger } from './logger.js';
 import { db } from './db.js';
+import { loadSkills } from './agent/skills.js';
+import { config } from './config.js';
 
 process.on('unhandledRejection', (err) => logger.error({ err }, 'unhandledRejection'));
 process.on('uncaughtException', (err) => logger.error({ err }, 'uncaughtException'));
@@ -21,3 +23,8 @@ run().catch((err) => {
   logger.error({ err: err.message, stack: err.stack }, 'fatal');
   process.exit(1);
 });
+
+// skills load once at startup; a bad skill is skipped, never fatal
+const skillRoot = config.agent.skillRoot || './skills';
+const n = loadSkills(skillRoot);
+if (n) logger.info({ root: skillRoot, n }, 'skills loaded');

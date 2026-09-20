@@ -1,6 +1,9 @@
 import { config } from '../../config.js';
 import { chatCompletion, streamChatCompletion, modelSupportsVision } from '../../providers/client.js';
-import { ensureUser, buildMessages, persistTurn, currentSessionId } from '../../conversation.js';
+import { memoryBlock, autoLearn } from '../../agent/memory.js';
+import { selectSkills, skillBlock, loadSkills } from '../../agent/skills.js';
+import { ensureUser, persistTurn, currentSessionId, loadHistory } from '../../conversation.js';
+import { buildStableMessages, runtimeContext } from '../../agent/context.js';
 import { recordUsage } from '../../db.js';
 import { logger } from '../../logger.js';
 import { splitLong, toTelegramMarkdown } from '../../format.js';
@@ -74,7 +77,21 @@ async function handlePrompt(ctx, userText, media) {
   const provider = media.length && config.vision.provider ? config.vision.provider : user.provider;
   const model = media.length && config.vision.model ? config.vision.model : user.model;
 
-  const messages = buildMessages(user, userText, sessionId);
+  const messages = await buildStableMessages(user, userText, {
+    history: await loadHistory(user.user_id, sessionId),
+    runtimeContext: runtimeContext({ sessionName: sessionId, workspace: process.cwd() }),
+  });
+
+  // Skills + memory are injected BELOW the cached prefix, as their own system
+  // messages. Changing them does not invalidate the prompt cache.
+  const skills = selectSkills(userText);
+  const skillText = skillBlock(skills);
+  if (skillText) messages.splice(1, 0, { role: 'system', content: skillText });
+
+  const memText = memoryBlock(user.user_id);
+  if (memText) messages.splice(1, 0, { role: 'system', content: memText });
+
+  autoLearn(user.user_id, userText, '');
   if (media.length) {
     messages[messages.length - 1] = {
       role: 'user',
@@ -107,27 +124,45 @@ async function handlePrompt(ctx, userText, media) {
 }
 
 async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId }) {
+  const { withEmptyResponseGuard } = await import('../../agent/guards.js');
   let buf = '';
   let lastEdit = 0;
+  const flush = async (text) => {
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      replyMsg.message_id,
+      toTelegramMarkdown(text) || '(no response)',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+  };
   try {
-    const stream = streamChatCompletion({
-      provider, model, messages, chatId,
-      temperature: user.temperature ?? config.defaults.temperature,
-      maxTokens: config.defaults.maxTokens,
+    await withEmptyResponseGuard({
+      signal: null,
+      openStream: () => streamChatCompletion({
+        provider, model, messages, chatId,
+        temperature: user.temperature ?? config.defaults.temperature,
+        maxTokens: config.defaults.maxTokens,
+      }),
+      onChunk: (acc) => {
+        buf = acc;
+        const now = Date.now();
+        if (now - lastEdit > 700 || buf.length > 3800) {
+          lastEdit = now;
+          ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, buf.slice(0, 4000) || PLACEHOLDER).catch(() => {});
+        }
+      },
+      onDone: async (final) => {
+        persistTurn(user.user_id, messages[messages.length - 1].content, final, null, sessionId);
+        recordUsage({ user_id: user.user_id, provider, model, usage: null });
+        await flush(final);
+      },
+      onFail: async (message) => {
+        logger.error({ message }, 'empty response guard failed');
+        await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, `⚠️ ${message}`.slice(0, 4000)).catch(() => {});
+      },
     });
-    for await (const delta of stream) {
-      buf += delta;
-      const now = Date.now();
-      if (now - lastEdit > 700 || buf.length > 3800) {
-        lastEdit = now;
-        await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, buf.slice(0, 4000) || PLACEHOLDER).catch(() => {});
-      }
-    }
-    persistTurn(user.user_id, messages[messages.length - 1].content, buf, null, sessionId);
-    recordUsage({ user_id: user.user_id, provider, model, usage: null });
-    await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, toTelegramMarkdown(buf) || '(empty)').catch(() => {});
   } catch (err) {
     logger.error({ err: err.message }, 'stream error');
-    await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, `❌ ${err.message}`).catch(() => {});
+    await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, `❌ ${err.message}`.slice(0, 4000)).catch(() => {});
   }
 }

@@ -81,6 +81,12 @@ export const config = {
     rateLimitPerMinute: int(process.env.RATE_LIMIT_PER_MINUTE, 30),
     // tools the agent may never call, even with approval
     blockedTools: csv(process.env.AGENT_BLOCKED_TOOLS),
+    // guardian LLM: a cheap second model pre-screens dangerous calls.
+    // Clearly-safe ones run without a keyboard; unsure → still asks.
+    // Must be a DIFFERENT (cheaper) model than the agent's.
+    guardianProvider: process.env.GUARDIAN_PROVIDER || '',
+    guardianModel: process.env.GUARDIAN_MODEL || '',
+    skillRoot: process.env.SKILLS_DIR || '',
   },
   plugins: {
     enabled: bool(process.env.PLUGINS_ENABLED, true),

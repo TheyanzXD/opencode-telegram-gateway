@@ -14,6 +14,17 @@ export function buildMessages(user, currentTurn, sessionId) {
   return [sys, ...history, { role: 'user', content: currentTurn }];
 }
 
+export function systemPromptForExport(user) {
+  return systemPromptFor(user);
+}
+
+export function loadHistory(userId, sessionId) {
+  return getHistory(userId, config.historyLimit, sessionId).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+}
+
 export function persistTurn(user_id, userText, assistantText, usage, sessionId) {
   addMessage(user_id, 'user', userText, null, sessionId);
   addMessage(user_id, 'assistant', assistantText, usage?.completion_tokens ?? null, sessionId);

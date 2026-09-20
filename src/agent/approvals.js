@@ -2,6 +2,13 @@
 // Human-in-the-loop gateway. A dangerous tool call parks itself in a Map of
 // deferred promises; the Telegram side resolves it from an inline-keyboard
 // callback. The engine's await is the pause.
+//
+// Three behaviors beyond the bare pause:
+// - yolo: per-user auto-approve. Dangerous by design; the toggle is explicit.
+// - denial breaker: a user who denies N times in a row is tired of being asked.
+//   Further dangerous calls in that turn are auto-denied without a keyboard.
+// - guardian: a second model judges whether approval is needed at all (see
+//   approval-smart.js). Clearly-safe calls run; risky ones still ask.
 
 import { logger } from '../logger.js';
 
@@ -9,6 +16,13 @@ import { logger } from '../logger.js';
 const pending = new Map();
 
 const TTL_MS = 10 * 60 * 1000; // an approval older than 10 min is stale
+
+// per-user counters: how many consecutive approvals have been denied
+const denialStreak = new Map();
+const DENIAL_BREAK_THRESHOLD = 3; // after 3 straight denials, stop asking
+
+/** Per-user yolo (auto-approve everything dangerous). */
+const yoloUsers = new Set();
 
 export class ApprovalRequired extends Error {
   constructor(approvalId, tool, args) {
@@ -18,6 +32,47 @@ export class ApprovalRequired extends Error {
     this.tool = tool;
     this.args = args;
   }
+}
+
+export function setYolo(userId, on) {
+  if (on) yoloUsers.add(userId);
+  else {
+    yoloUsers.delete(userId);
+    denialStreak.delete(userId);
+  }
+}
+
+export function isYolo(userId) {
+  return yoloUsers.has(userId);
+}
+
+/** Called when a user denies. Tracks the streak and reports whether asking is pointless. */
+export function noteDenial(userId) {
+  const n = (denialStreak.get(userId) || 0) + 1;
+  denialStreak.set(userId, n);
+  return n >= DENIAL_BREAK_THRESHOLD;
+}
+
+/** Any approve resets the streak — the user is engaging again. */
+export function noteApproval(userId) {
+  denialStreak.delete(userId);
+}
+
+export function denialBroken(userId) {
+  return (denialStreak.get(userId) || 0) >= DENIAL_BREAK_THRESHOLD;
+}
+
+/**
+ * Decide what happens to a dangerous call, without creating an approval yet.
+ * Returns one of: 'allow' (yolo or guardian-approved), 'ask' (keyboard),
+ * 'deny' (denial breaker tripped).
+ */
+export function gateDecision(userId, tool, guardianVerdict) {
+  if (isYolo(userId)) return 'allow';
+  if (denialBroken(userId)) return 'deny';
+  // guardian 'safe' lowers friction only; 'risky' and null (unavailable) both ask
+  if (guardianVerdict === 'safe') return 'allow';
+  return 'ask';
 }
 
 export function createApproval(userId, tool, args) {
@@ -44,6 +99,8 @@ export function resolveApproval(id, approved) {
   if (!p) return false;
   pending.delete(id);
   logger.info({ id, tool: p.tool, approved }, 'approval resolved');
+  if (approved) noteApproval(p.userId);
+  else noteDenial(p.userId);
   p.resolve(approved);
   return true;
 }
