@@ -162,6 +162,21 @@ The closest thing to host mutation from chat, outside `/agent`, is `/model add`
 (writes `providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
 touch only project files.
 
+## Browser
+
+There is no `/browse` command. The browser is agent tools — the model calls
+`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`,
+`browser_read`, `browser_search` inside a `/agent` turn, the same shape as
+Hermes Agent. See [`docs/browser.md`](docs/browser.md) for the full tool list,
+the `@eN` ref system, and why Camoufox instead of Chromium.
+
+`browser_click` and `browser_type` are approval-gated: they mutate state on a
+real remote site. Read-only tools are not.
+
+One Camoufox session per chat, held in a module map. If a `/agent` turn crashes
+without closing it, the session lingers until the next `browser_close` or a
+process restart — it does not leak into other chats.
+
 ## Searching / finding things
 
 ```bash

@@ -36,29 +36,23 @@ npm start             # launch the bot
 
 You only need two things: a **Telegram bot token** (from [@BotFather](https://t.me/BotFather)) and **one API key** for the provider you picked as `DEFAULT_PROVIDER`. `providers.yaml` ships with public providers — OpenRouter and Groq both have free tiers that need only an email to sign up.
 
-### Optional: headless browser
+### Optional: headless browser (agent tools)
 
-Two browser backends. Install at least the first.
-
-**Camoufox** (anti-detect Firefox) — what `/browse search` and `/browse browse`
-use. On a datacenter IP, plain headless Chromium is hard-blocked by Google and
-captcha-walled by Brave; Camoufox spoofs a real Windows/Firefox fingerprint
-(`navigator.webdriver` false, matching UA/plugins/WebGL), which is what gets
-past those checks.
+The agent's browser tools (`browser_navigate`, `browser_snapshot`, …) need
+**Camoufox** — anti-detect Firefox. On a datacenter IP, plain headless Chromium
+is hard-blocked (Google → `/sorry`, Brave → captcha); Camoufox spoofs a real
+Windows/Firefox fingerprint (`navigator.webdriver` false, matching UA/plugins/
+WebGL), which is what gets past the browser-side checks.
 
 ```bash
 npx camou install
 ```
 
-**Chromium** — what `/browse open`, `click`, `type` and the interactive
-commands use. `agent-browser` is a repo dependency, so `npm ci` installs it;
-it does not bundle Chromium (~150 MB), which the first `/browse` fetches once:
+That is the whole setup. `src/bootstrap.js` resolves the install from the `camou`
+CLI's own registry at startup — no manual env, no patched library.
 
-```bash
-npm run browser install
-```
-
-`/browse search <q>` and `/browse browse <url>` then work in chat.
+The browser is then driven by the model: `/agent "find …"` calls
+`browser_navigate`, `browser_snapshot` (`@eN` refs), `browser_click`, etc.
 
 ### Optional: authenticated proxies
 
@@ -251,7 +245,7 @@ providers:
 - [`prompts/default.md`](prompts/default.md) — the default system prompt, annotated. Live version: `SYSTEM_PROMPT` in `.env`
 - [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
 - [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
-- [`docs/browser.md`](docs/browser.md) — `/browse`: Camoufox (search/browse) + headless Chromium (interactive)
+- [`docs/browser.md`](docs/browser.md) — the browser as agent tools: Camoufox, `@eN` refs, engine fallback
 - [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and what can run shell commands
 
 ## Test

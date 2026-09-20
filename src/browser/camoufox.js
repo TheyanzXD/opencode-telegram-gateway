@@ -12,8 +12,8 @@
 //    ddg-lite  — smaller page, same engine
 //    brave     — captcha on this IP, kept for when a proxy is in front
 //
-// Google stays available to a user with `/browse open`, intentionally not in
-// the search chain.
+// Google stays available to a user who browser_navigates there directly,
+// intentionally not in the search chain.
 //
 // SETUP: Camoufox binaries must be present. The `camou` npm package installs
 // them with `camou install`; camoufox-js resolves the same cache once its
