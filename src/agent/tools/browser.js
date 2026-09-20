@@ -16,7 +16,10 @@
 
 import { z } from 'zod';
 import { logger } from '../../logger.js';
-import { camoufoxInstalled, getPage, camouClose } from '../../browser/camoufox.js';
+import { camoufoxInstalled, getPage, camouClose, saveBrowserState } from '../../browser/camoufox.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { workspaceFor } from '../workspace.js';
 
 const MAX_TEXT = 12 * 1024; // 12 KB of page text per call
 
@@ -26,6 +29,20 @@ const _refs = new Map();
 function refsOf(chatId) {
   if (!_refs.has(chatId)) _refs.set(chatId, []);
   return _refs.get(chatId);
+}
+
+/**
+ * Resolve a frame by name for read/click/type. A name that matches nothing is
+ * an error, never a silent fallthrough to the top document — the model would
+ * read the wrong page and not know.
+ */
+function resolveFrame(page, frame) {
+  if (!frame) return page;
+  return (
+    page.frame?.(frame) ||
+    page.frames?.().find((f) => f !== page.mainFrame() && (f.name() === frame || String(f.url()).includes(frame))) ||
+    null
+  );
 }
 
 /** Playwright selector for an @eN ref, or the raw string if it is not a ref. */
@@ -166,7 +183,7 @@ export const browserRead = {
     if (!page) return '⚠️ no browser session for this chat — call browser_navigate first';
     // A frame name swaps the document being read. An unknown name is an error,
     // not a silent read of the top page — that would look like a success.
-    const doc = frame ? (page.frame?.(frame) || page.frames?.().find((f) => f !== page && String(f.url()).includes(frame)) || null) : page;
+    const doc = resolveFrame(page, frame);
     if (!doc) return `⚠️ no iframe named or matching "${frame}" on this page`;
     if (!selector) {
       const text = (await doc.innerText('body').catch(() => ''))
@@ -204,6 +221,7 @@ export const browserSnapshot = {
 
 const clickSchema = z.object({
   target: z.string().min(1),
+  frame: z.string().optional(),
 });
 
 export const browserClick = {
@@ -217,13 +235,15 @@ export const browserClick = {
     additionalProperties: false,
   },
   schema: clickSchema,
-  async execute({ target }, ctx = {}) {
+  async execute({ target, frame }, ctx = {}) {
     const chatId = ctx.chatId ?? 0;
     const t = resolveTarget(chatId, target);
     if (t.err) return `⚠️ ${t.err}`;
     const page = await getPage(chatId);
+    const doc = resolveFrame(page, frame);
+    if (!doc) return `⚠️ no iframe named or matching "${frame}" on this page`;
     try {
-      await page.locator(t.sel).first().click({ timeout: 15_000 });
+      await doc.locator(t.sel).first().click({ timeout: 15_000 });
     } catch (err) {
       return `⚠️ click failed: ${err.message}\nRun browser_snapshot again — the page may have changed since.`;
     }
@@ -242,6 +262,7 @@ const typeSchema = z.object({
   target: z.string().min(1),
   text: z.string().max(4000),
   submit: z.boolean().optional(),
+  frame: z.string().optional(),
 });
 
 export const browserType = {
@@ -330,6 +351,103 @@ export const browserClose = {
   },
 };
 
+// ---------------------------------------------------------------- download
+
+const downloadSchema = z.object({
+  url: z.string().url().min(1),
+  filename: z.string().min(1).max(200).optional(),
+  wait_ms: z.number().int().positive().max(120_000).optional(),
+});
+
+export const browserDownload = {
+  name: 'browser_download',
+  description:
+    'Download a file through the anti-detect browser session — the URL is fetched as the logged-in user, with their cookies and fingerprint, which plain fetch_url cannot do. Saves to the workspace and returns the path. Read-only to the site, but the file lands on disk: verify what you asked for.',
+  isDangerous: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'The file URL' },
+      filename: { type: 'string', description: 'Name to save as (default: from the URL path)' },
+      wait_ms: { type: 'number', description: 'Max wait for the download to finish (default 60000)' },
+    },
+    required: ['url'],
+    additionalProperties: false,
+  },
+  schema: downloadSchema,
+  async execute({ url, filename, wait_ms = 60_000 }, ctx = {}) {
+    const chatId = ctx.chatId ?? 0;
+    const page = await getPage(chatId);
+    const outDir = path.join(workspaceFor(ctx.userId ?? ctx.chatId), 'downloads');
+    try { fs.mkdirSync(outDir, { recursive: true }); } catch {}
+
+    const name = filename || new URL(url).pathname.split('/').filter(Boolean).pop() || 'download.bin';
+    const dest = path.join(outDir, name);
+
+    // Playwright's download event is the only reliable way: a direct fetch would
+    // drop the session cookies that make the URL downloadable at all.
+    try {
+      const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: wait_ms }),
+        page.goto(url),
+      ]);
+      await download.saveAs(dest);
+      const stat = fs.statSync(dest);
+      return `✅ saved ${name} (${Math.round(stat.size / 1024)} KB) to workspace/downloads/${name}`;
+    } catch (err) {
+      // Not every URL triggers a download event — some serve bytes directly.
+      // Fall back to saving the response body, still inside the browser session.
+      try {
+        const buf = await page.goto(url).then((r) => r?.body());
+        if (buf && buf.length) {
+          fs.writeFileSync(dest, buf);
+          return `✅ saved ${name} (${Math.round(buf.length / 1024)} KB, direct) to workspace/downloads/${name}`;
+        }
+      } catch (e2) { /* fall through to the original error */ }
+      return `⚠️ download failed: ${err.message}`;
+    }
+  },
+};
+
+// ---------------------------------------------------------------- auth state
+
+const authSchema = z.object({
+  action: z.enum(['save', 'clear', 'status']),
+});
+
+export const browserAuth = {
+  name: 'browser_auth',
+  description:
+    'Persist or inspect the browser session credentials. save: snapshot cookies + localStorage to disk, so a login survives a browser restart and the next browser_navigate starts signed in. clear: drop the saved state (logs out). status: whether a saved state exists. The state is per-chat, stored under data/, never in the workspace.',
+  isDangerous: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['save', 'clear', 'status'], description: 'save: persist now. clear: drop it. status: does one exist' },
+    },
+    required: ['action'],
+    additionalProperties: false,
+  },
+  schema: authSchema,
+  async execute({ action }, ctx = {}) {
+    const chatId = ctx.chatId ?? 0;
+    const stateFile = path.join(process.cwd(), 'data', 'browser-state', `state-${chatId}.json`);
+    if (action === 'status') {
+      const exists = fs.existsSync(stateFile);
+      return exists ? `a saved session exists for this chat (${Math.round(fs.statSync(stateFile).size / 1024)} KB). browser_navigate restores it automatically.` : 'no saved session — the browser starts logged out.';
+    }
+    if (action === 'clear') {
+      try { fs.unlinkSync(stateFile); } catch {}
+      return '✅ saved session cleared — the next browser session starts logged out.';
+    }
+    // save
+    const ok = await saveBrowserState(chatId);
+    return ok
+      ? '✅ session saved — cookies and localStorage persist across browser restarts.'
+      : '⚠️ no live browser session to save. Navigate and log in first.';
+  },
+};
+
 export const browserTools = [
   browserNavigate,
   browserRead,
@@ -337,5 +455,7 @@ export const browserTools = [
   browserClick,
   browserType,
   browserSearch,
+  browserDownload,
+  browserAuth,
   browserClose,
 ];

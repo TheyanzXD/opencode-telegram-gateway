@@ -21,8 +21,8 @@
 
 import { launchOptions } from 'camoufox-js';
 import { firefox } from 'playwright-core';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { logger } from '../logger.js';
 
 const CAMOUFOX_CACHE = '/root/.cache/camoufox';
@@ -39,7 +39,7 @@ const CAMOUFOX_CACHE = '/root/.cache/camoufox';
 export function ensureCamoufoxEnv() {
   const dir = process.env.CAMOUFOX_INSTALL_DIR || null;
   if (!dir) return null;
-  if (!existsSync(join(dir, 'camoufox-bin'))) return null;
+  if (!existsSync(path.join(dir, 'camoufox-bin'))) return null;
 
   // addon downloads fail in this sandbox; skip them entirely
   if (!process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD) {
@@ -51,6 +51,15 @@ export function ensureCamoufoxEnv() {
 // One browser per chat: the turn lease keeps one agent turn per chat, but two
 // chats can run concurrently and must never share a page or a ref map.
 const _sessions = new Map(); // chatId → {browser, context, page}
+
+// Where this chat's storageState lives: cookies + localStorage, saved on close
+// and replayed on launch. Keeping it under the agent's data dir, not the
+// workspace, so a workspace wipe does not log every user out.
+function statePath(chatId) {
+  const root = path.join(process.cwd(), 'data', 'browser-state');
+  try { mkdirSync(root, { recursive: true }); } catch {}
+  return path.join(root, `state-${chatId}.json`);
+}
 
 export async function getPage(chatId) {
   const existing = _sessions.get(chatId);
@@ -70,14 +79,35 @@ export async function getPage(chatId) {
     block_images: true,
   });
   const browser = await firefox.launch(opts);
-  const context = await browser.newContext();
+  // A saved storageState replays cookies and localStorage, so a login from a
+  // previous session survives a browser restart. A corrupt or partial file is
+  // ignored — a bad state must never block a fresh session.
+  const stateFile = statePath(chatId);
+  let context;
+  try {
+    const raw = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null;
+    context = raw ? await browser.newContext({ storageState: JSON.parse(raw) }) : await browser.newContext();
+  } catch (err) {
+    logger.warn({ err: err.message }, 'bad storageState — starting fresh');
+    context = await browser.newContext();
+  }
   const page = await context.newPage();
-  _sessions.set(chatId, { browser, context, page });
+  _sessions.set(chatId, { browser, context, page, stateFile });
   logger.info({ chatId }, 'camoufox browser launched (windows fingerprint)');
   return page;
 }
 
 /** True when this chat has a live page (used by /about and browser_close hints). */
+export async function saveBrowserState(chatId) {
+  const s = _sessions.get(chatId);
+  if (!s?.context) return false;
+  try {
+    const state = await s.context.storageState();
+    writeFileSync(s.stateFile || statePath(chatId), JSON.stringify(state));
+    return true;
+  } catch { return false; }
+}
+
 export function sessionActive(chatId) {
   const s = _sessions.get(chatId);
   return Boolean(s && s.page && !s.page.isClosed?.());
@@ -86,6 +116,14 @@ export function sessionActive(chatId) {
 async function closeBrowser(chatId) {
   const s = _sessions.get(chatId);
   if (!s) return;
+  // Persist auth before teardown. A failure here is not fatal — the next
+  // session just starts logged out.
+  if (s.stateFile) {
+    try {
+      const state = await s.context.storageState();
+      writeFileSync(s.stateFile, JSON.stringify(state));
+    } catch (err) { logger.warn({ err: err.message }, 'storageState save failed'); }
+  }
   try { await s.browser?.close(); } catch {}
   _sessions.delete(chatId);
 }
@@ -218,3 +256,4 @@ export async function camouClose(chatId = 0) {
 export function camoufoxInstalled() {
   return ensureCamoufoxEnv() !== null;
 }
+

@@ -8,3 +8,4 @@ proxy-premium*.txt
 dist/
 coverage/
 workspace/
+data/browser-state/
