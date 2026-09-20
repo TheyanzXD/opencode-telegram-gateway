@@ -14,6 +14,7 @@ import { subagentTools } from './tools/subagent.js';
 import { browserAdvancedTools } from './tools/browser-advanced.js';
 import { observabilityTools } from './tools/observability.js';
 import { sysinfoTool } from './tools/sysinfo.js';
+import { parityTools } from './tools/opencode-parity.js';
 
 export class ToolRegistry {
   constructor(tools = []) {
@@ -82,5 +83,6 @@ export function createDefaultRegistry() {
     bashTool, ...fsTools, ...searchTools, ...browserTools,
     ...browserAdvancedTools, ...execTools, ...fileTools, ...memoryTools,
     ...subagentTools, ...observabilityTools, sysinfoTool,
+    ...parityTools,
   ]);
 }

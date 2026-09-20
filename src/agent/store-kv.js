@@ -74,6 +74,14 @@ function handle() {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_decisions_user ON decisions(user_id, created_at DESC);
+
+    -- Task list: one row per session, written whole on every update. A partial
+    -- write would let a stale task survive a completed rewrite.
+    CREATE TABLE IF NOT EXISTS todos (
+      user_id    TEXT PRIMARY KEY,
+      todos      TEXT NOT NULL,          -- JSON array
+      updated_at INTEGER NOT NULL
+    );
   `);
   logger.info('agent store ready');
   return _db;
@@ -206,4 +214,21 @@ export function recentDecisions(userId, limit = 10) {
     SELECT chose, rejected, reason, created_at FROM decisions
     WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
   `).all(String(userId), limit);
+}
+
+
+// Session task list. todowrite sends the full list on every call, so this is a
+// replace-not-merge — no merging of stale state into the new truth.
+export function writeTodos(userId, todos) {
+  handle().prepare(`
+    INSERT INTO todos (user_id, todos, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET todos = excluded.todos, updated_at = excluded.updated_at
+  `).run(String(userId), JSON.stringify(todos), Date.now());
+}
+
+export function readTodos(userId) {
+  const row = handle().prepare('SELECT todos FROM todos WHERE user_id = ?').get(String(userId));
+  if (!row) return null;
+  try { return JSON.parse(row.todos); } catch { return null; }
 }
