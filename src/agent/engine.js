@@ -170,7 +170,7 @@ export class AgentEngine {
           this.onEvent({ type: 'toolStart', tool: name, args });
         }
         const t0 = Date.now();
-        const result = await this.registry.execute(name, args);
+        const result = await this.registry.execute(name, args, { chatId, userId });
         const output = String(result.content).slice(0, MAX_TURN_CHARS);
         this.onEvent({ type: 'toolEnd', tool: name, output, isError: result.isError });
         this.tracer.toolCall(name, Date.now() - t0, !result.isError, output);

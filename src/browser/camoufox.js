@@ -28,44 +28,18 @@ import { logger } from '../logger.js';
 const CAMOUFOX_CACHE = '/root/.cache/camoufox';
 
 /**
- * camoufox-js validates its browser install by reading version.json from the
- * install dir, in its own shape ({release, version}). The `camou` CLI writes a
- * different shape. Rather than patch the library, write the file it expects.
+ * Resolve the Camoufox install for this process.
+ *
+ * bootstrap.js sets CAMOUFOX_INSTALL_DIR at startup from the `camou` CLI's own
+ * registry, and rewrites version.json into the shape camoufox-js expects. This
+ * function only reads that decision back — it does not mutate anything.
  *
  * @returns {string|null} the browser dir, or null if Camoufox is not installed
  */
 export function ensureCamoufoxEnv() {
-  // registry written by `camou install` (the camou CLI owns the install dir)
-  const registry = join('/root/.local/share/camoucli', 'browsers', 'registry.json');
-  if (!existsSync(registry)) return null;
-
-  let version;
-  try {
-    const reg = JSON.parse(readFileSync(registry, 'utf8'));
-    version = reg.currentVersion || Object.keys(reg.installs || {})[0];
-  } catch { return null; }
-  if (!version) return null;
-
-  const dir = join(CAMOUFOX_CACHE, 'browsers', 'official', version);
-  const bin = join(dir, 'camoufox-bin');
-  if (!existsSync(bin)) return null;
-
-  // camoufox-js needs this file in its own shape, next to the binary
-  const vpath = join(dir, 'version.json');
-  const backup = join(dir, 'version.camou.json');
-  try {
-    const raw = JSON.parse(readFileSync(vpath, 'utf8'));
-    if (!raw.release) {
-      if (!existsSync(backup)) writeFileSync(backup, JSON.stringify(raw));
-      writeFileSync(vpath, JSON.stringify({
-        release: raw.release_tag || raw.release_version || raw.version,
-        version: (raw.release_version || raw.version || '').split('-')[0],
-      }));
-    }
-  } catch (err) {
-    logger.warn({ err: err.message }, 'camoufox version.json fix failed');
-    return null;
-  }
+  const dir = process.env.CAMOUFOX_INSTALL_DIR || null;
+  if (!dir) return null;
+  if (!existsSync(join(dir, 'camoufox-bin'))) return null;
 
   // addon downloads fail in this sandbox; skip them entirely
   if (!process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD) {
@@ -74,12 +48,13 @@ export function ensureCamoufoxEnv() {
   return dir;
 }
 
-let _browser = null;
-let _context = null;
-let _page = null;
+// One browser per chat: the turn lease keeps one agent turn per chat, but two
+// chats can run concurrently and must never share a page or a ref map.
+const _sessions = new Map(); // chatId → {browser, context, page}
 
-async function getPage() {
-  if (_page) return _page;
+export async function getPage(chatId) {
+  const existing = _sessions.get(chatId);
+  if (existing?.page) return existing.page;
 
   const dir = ensureCamoufoxEnv();
   if (!dir) throw new Error('Camoufox not installed — run `npx camou install` first');
@@ -94,16 +69,25 @@ async function getPage() {
     i_know_what_im_doing: true,
     block_images: true,
   });
-  _browser = await firefox.launch(opts);
-  _context = await _browser.newContext();
-  _page = await _context.newPage();
-  logger.info('camoufox browser launched (windows fingerprint)');
-  return _page;
+  const browser = await firefox.launch(opts);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  _sessions.set(chatId, { browser, context, page });
+  logger.info({ chatId }, 'camoufox browser launched (windows fingerprint)');
+  return page;
 }
 
-async function closeBrowser() {
-  try { await _browser?.close(); } catch {}
-  _browser = _context = _page = null;
+/** True when this chat has a live page (used by /about and browser_close hints). */
+export function sessionActive(chatId) {
+  const s = _sessions.get(chatId);
+  return Boolean(s && s.page && !s.page.isClosed?.());
+}
+
+async function closeBrowser(chatId) {
+  const s = _sessions.get(chatId);
+  if (!s) return;
+  try { await s.browser?.close(); } catch {}
+  _sessions.delete(chatId);
 }
 
 const SEARCH_ENGINES = [
@@ -142,12 +126,16 @@ function isBotWall(text, url) {
  * @param {string} [opts.proxy]  proxy URL; a residential one unlocks brave
  */
 export async function camouSearch(query, opts = {}) {
-  const page = await getPage();
-  if (opts.proxy) {
+  const chatId = opts.chatId ?? 0;
+  const page = await getPage(chatId);
+  const s = _sessions.get(chatId);
+  if (opts.proxy && s?.context && s.page) {
     // proxy is set at context level; rebuild the context if it changed
-    await _context?.close().catch(() => {});
-    _context = await _browser.newContext({ proxy: { server: opts.proxy } });
-    _page = await _context.newPage();
+    await s.context.close().catch(() => {});
+    const context = await s.browser.newContext({ proxy: { server: opts.proxy } });
+    const np = await context.newPage();
+    s.context = context;
+    s.page = np;
   }
 
   for (const engine of SEARCH_ENGINES) {
@@ -168,7 +156,7 @@ export async function camouSearch(query, opts = {}) {
     if (results.length) return { engine: engine.label, results };
     logger.warn({ engine: engine.id }, 'no results parsed, next engine');
   }
-  return { error: 'no search engine returned results from this IP — try /browse open with a specific URL' };
+  return { error: 'no search engine returned results from this IP — pass a URL to browser_navigate instead' };
 }
 
 async function extractResults(page, engineId) {
@@ -207,8 +195,8 @@ async function extractResults(page, engineId) {
  * @param {string} url
  * @returns {Promise<{title: string, url: string, text: string} | {error: string}>}
  */
-export async function camouBrowse(url, { timeoutMs = 40_000 } = {}) {
-  const page = await getPage();
+export async function camouBrowse(url, { timeoutMs = 40_000, chatId = 0 } = {}) {
+  const page = await getPage(chatId);
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
   } catch (err) {
@@ -222,8 +210,8 @@ export async function camouBrowse(url, { timeoutMs = 40_000 } = {}) {
   };
 }
 
-export async function camouClose() {
-  await closeBrowser();
+export async function camouClose(chatId = 0) {
+  await closeBrowser(chatId);
   return 'camoufox closed';
 }
 

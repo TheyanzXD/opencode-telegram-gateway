@@ -1,20 +1,17 @@
-// language: JavaScript (Node 18+), file: src/cli/browser.js
-// `opencode-gateway browser status|install|verify` — operator-side helper for
-// the /browse chat command. All it does is resolve the binary, run npm, and
-// shell out to agent-browser's own install/doctor paths. Never imported by
-// the bot itself (the bot imports src/browser/tool.js only).
+// language: JavaScript (Node 20+ ESM), file: src/cli/browser.js
+// `opencode-gateway browser status|install` — operator-side helper for the
+// agent's browser tools. The browser is not a chat command anymore: the model
+// calls browser_navigate / browser_snapshot / browser_click inside /agent.
+// This CLI is the only place an operator needs to check or fetch the binary.
 
 import { spawn } from 'node:child_process';
-import { browserAvailable, browserExec } from '../browser/tool.js';
+import { camoufoxInstalled } from '../browser/camoufox.js';
 
-// Chromium is not bundled — it is the one heavy (~150 MB) piece. The npm
-// package is a local dependency already; this fetches its browser binary.
-function installChromium() {
+// `camou` owns the install. It downloads Camoufox and its own metadata; the bot
+// resolves the same cache at startup (src/bootstrap.js).
+function installCamoufox() {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, ['bin/cli.js', 'install', 'chromium'], {
-      cwd: new URL('../node_modules/agent-browser', import.meta.url).pathname,
-      stdio: 'inherit',
-    });
+    const child = spawn('npx', ['camou', 'install'], { stdio: 'inherit' });
     child.on('close', code => resolve(code === 0));
     child.on('error', () => resolve(false));
   });
@@ -25,48 +22,30 @@ export async function browserCmd(args) {
 
   switch (sub.toLowerCase()) {
     case 'status': {
-      const ok = browserAvailable();
-      console.log(`agent-browser: ${ok ? 'found' : 'NOT installed'}`);
-      if (ok) {
-        const r = await browserExec(['--version']);
-        console.log(`version:     ${(r.stdout || '').trim() || 'unknown'}`);
-      }
-      console.log('\n/browse in chat will ' + (ok ? 'work.' : 'reply with install instructions.'));
+      const ok = camoufoxInstalled();
+      console.log(`Camoufox: ${ok ? '✅ installed' : '⚠️  NOT installed'}`);
+      console.log('\nThe agent tools browser_navigate / browser_snapshot / browser_click');
+      console.log('need this binary. Without it they answer with the install line.');
       if (!ok) console.log('\nRun: opencode-gateway browser install');
       return;
     }
 
     case 'install': {
-      console.log('fetching Chromium (~150 MB, one-time)...');
-      const ok = await installChromium();
-      if (!ok) { console.error('chromium install failed'); process.exit(1); }
-      console.log('\n✓ done. /browse is ready.');
-      return;
-    }
-
-    case 'verify': {
-      if (!browserAvailable()) { console.error('agent-browser not installed'); process.exit(1); }
-      const target = args[1] || 'https://example.com';
-      console.log(`opening ${target} ...`);
-      const r = await browserExec(['open', target], { timeoutMs: 45_000 });
-      if (!r.ok) { console.error(r.stderr || 'open failed'); process.exit(1); }
-      console.log(r.stdout.trim());
-      const t = await browserExec(['read'], { timeoutMs: 30_000 });
-      console.log('\n--- page text ---');
-      console.log(t.stdout.trim().slice(0, 500));
-      await browserExec(['close', '--all']);
-      console.log('\n✓ browser verified');
+      console.log('installing Camoufox via the camou CLI (~150 MB, one-time)...');
+      const ok = await installCamoufox();
+      if (!ok) { console.error('camou install failed'); process.exit(1); }
+      console.log('\n✓ done. The browser_* agent tools are ready.');
       return;
     }
 
     default:
-      console.log(`usage: opencode-gateway browser <status|install|verify [url]>
+      console.log(`usage: opencode-gateway browser <status|install>
 
-  status    is agent-browser resolvable? (local dep, PATH, or AGENT_BROWSER_BIN)
-  install   fetch Chromium — the one heavy piece the npm package does not bundle
-  verify    open a URL and read it back (default https://example.com)
+  status    is Camoufox installed and resolvable?
+  install   fetch Camoufox — the one heavy piece (via the camou CLI)
 
-agent-browser itself is already a dependency of this repo; npm ci installs it.
-Chromium needs this one-time fetch.`);
+The browser is driven by the agent: /agent "<task>" calls browser_navigate,
+browser_snapshot (@eN refs), browser_click, browser_type, browser_read,
+browser_search. There is no /browse command.`);
   }
 }

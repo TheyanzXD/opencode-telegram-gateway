@@ -23,10 +23,11 @@ Use /model to switch. /help for full commands.`,
 export async function helpCommand(ctx) {
   const admin = ctx.session?.isAdmin ? '\n/admin — admin panel (channel-only)' : '';
   await ctx.reply(
-`/start — show current model + session
+`/start — current model + active session
 /help — this message
 /model [provider/model] — switch model
 /model list <provider> — live models from the provider
+/model add <provider>/<modelid> [context] [vision] — admin: register a model
 /models — list registered models
 /temperature <0-2> — set temperature
 /system <prompt> — set system prompt
@@ -34,10 +35,14 @@ export async function helpCommand(ctx) {
 /history — show last messages (active session)
 /sessions — conversation sessions${admin}
 
-/browse <cmd> <args> — headless browser: open <url>, snapshot, click, type, read, close
-/agent <task> — tool-calling agent: shell, files, web search (approvals for destructive tools)
+/agent <task> — tool-calling agent: shell, files, browser, web search
+   browser tools: browser_navigate, browser_snapshot (@eN refs),
+   browser_click, browser_type, browser_read, browser_search
+   destructive tools pause for an approval before running
 /abort — cancel the running /agent in this chat
-/tools — list the agent's tools
+/tools — list every tool the agent can call
+/yolo on|off — auto-approve dangerous tools (no keyboard)
+/estop — emergency stop: cancel everything now
 /debug — last agent run trace for this chat (provider calls, tools, approvals)
 /plugins — loaded plugins + failures
 /about — version, capabilities, config paths`,
@@ -168,9 +173,10 @@ export async function aboutCommand(ctx) {
   const model = u?.model ? `${u.provider}/${u.model}` : `${config.defaults.provider}/${config.defaults.model} (default)`;
   let browserLine;
   try {
-    const m = await import('../../browser/tool.js');
-    if (!m.browserAvailable()) browserLine = 'Browser: ⚠️ not installed (`npm run browser install`)';
-    else browserLine = `Browser: ✅ ${m.browserReady() ? 'ready' : 'Chromium fetches on first /browse'}`;
+    const { camoufoxInstalled } = await import('../../browser/camoufox.js');
+    browserLine = camoufoxInstalled()
+      ? 'Browser: ✅ Camoufox ready (`/agent` + browser_* tools)'
+      : 'Browser: ⚠️ Camoufox not installed (`npx camou install`)';
   } catch { browserLine = 'Browser: —'; }
   await ctx.reply(
 `🤖 *OpenCode Gateway*
@@ -180,6 +186,8 @@ Default: \`${model}\`
 Proxy: ${config.proxy?.enabled ? '✅ on' : '⚠️ off'}
 ${browserLine}
 Agent: ${config.agent?.enabled ? '✅ on (`/agent <task>`)' : '⚠️ off (AGENT_ENABLED)'}
+Guardian: ${config.agent?.guardianModel ? '✅ on (approval pre-screen)' : '⚠️ off (GUARDIAN_MODEL)'}
+Skills: ${config.agent?.skillRoot ? '✅ on' : '⚠️ off'}
 Node ${process.version}`,
     { parse_mode: 'Markdown' }
   );

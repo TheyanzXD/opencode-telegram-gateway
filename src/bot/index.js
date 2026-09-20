@@ -15,7 +15,6 @@ import { yoloCommand, estopCommand } from './commands/agent-admin.js';
 import { debugCommand, pluginsCommand } from './commands/debug.js';
 import { pluginsLoader } from '../plugins/state.js';
 import { leaseMiddleware } from '../agent/turn-lease.js';
-import { browserSafe } from '../browser/tool.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
 import { sweepDead } from '../proxy/pool.js';
@@ -81,14 +80,8 @@ export function createBot() {
   bot.callbackQuery(/^approve:/, approvalCallback);
   bot.callbackQuery(/^deny:/, approvalCallback);
 
-  // Browser automation — state persists per chat until /browse close
-  bot.command('browse', async (ctx) => {
-    const arg = (ctx.match || '').trim();
-    if (!arg) return ctx.reply(browserSafe.usageMarkdown(), { parse_mode: 'Markdown' });
-    const args = arg.split(/\s+/);
-    const reply = await browserSafe(args, { chatId: ctx.chat.id });
-    return ctx.reply(reply.slice(0, 4090), { parse_mode: 'Markdown' });
-  });
+  // Browser is an agent tool now, not a chat command: the model calls
+  // browser_navigate / browser_snapshot / browser_click via /agent.
 
   // Fallbacks
   bot.on('message:text', onText);

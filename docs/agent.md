@@ -33,9 +33,13 @@ directory the agent reads and writes.
 | `/agent <task>` | Run the tool loop on a prompt. Streams progress into one message. |
 | `/abort` | Cancel the running loop for this chat. Also denies any pending approval. |
 | `/tools` | List the tools the agent may call. |
+| `/yolo on\|off` | Auto-approve every dangerous call for this user. No keyboard, no second chance. |
+| `/estop` | Emergency stop: cancel every running turn, deny every pending approval. |
 
-A second `/agent` in the same chat while one is running is refused — use
-`/abort` first.
+A second message while a turn is running does not race the first — it takes a
+turn lease, queues behind it, and runs against the now-complete history. A
+stale lease (the previous turn crashed without releasing) is reclaimed after
+5 minutes. `/abort` and `/estop` release leases immediately.
 
 ## The tools
 
@@ -49,6 +53,26 @@ A second `/agent` in the same chat while one is running is refused — use
 - `list_dir` — directory listing.
 - `web_search` — DuckDuckGo HTML, no API key needed.
 - `fetch_url` — raw text or JSON from a URL, capped at 20 KB.
+- `browser_navigate` — open a URL in the anti-detect browser (Camoufox).
+  Returns the title and the first lines of text. Read-only.
+- `browser_snapshot` — list every clickable element on the current page as
+  stable `@eN` refs. **This is the step before any click or type.** Read-only.
+- `browser_read` — full text of the page, or of one element (`@eN` or
+  selector). Read-only.
+- `browser_click` — click an element. **Dangerous** — it performs a real action
+  on a remote site (submit, buy, delete, post).
+- `browser_type` — fill a form field, optionally press Enter. **Dangerous.**
+- `browser_search` — web search through the anti-detect browser, with engine
+  fallback (DuckDuckGo HTML → Lite → Brave). Read-only.
+- `browser_close` — close the session for this chat, free the browser.
+
+One browser session per chat: `browser_navigate` on chat A never touches chat
+B's page. The session lives until `browser_close`, until the process restarts,
+or until a stale lease is reclaimed.
+
+Refs are page-scoped and rebuilt on every `browser_snapshot`. A ref from before
+a click or a navigation is stale — the tool says so instead of clicking
+whatever now sits at that index.
 
 Every path is resolved against the workspace and rejected if it escapes. `..`
 traversal out of the sandbox does not reach the filesystem.
@@ -77,6 +101,37 @@ resolves every pending approval for that user as denied.
 
 The `approve:` / `deny:` callback prefix is matched by regex on
 `callback_query`, so the buttons cannot collide with other handlers.
+
+### Yolo and the denial breaker
+
+`/yolo on` auto-approves every dangerous call — it skips the keyboard entirely.
+It is a real privilege escalation for a user who has decided they trust the
+loop; `/yolo off` restores approvals.
+
+The **denial breaker** is the opposite case. A user who denies three approvals
+in a row is tired of being asked: further dangerous calls in that run are
+auto-denied without a keyboard, and the model gets `⛔ denied (approval
+fatigue)` so it can pick a different path. Any approval resets the streak.
+
+### The guardian LLM
+
+`GUARDIAN_PROVIDER` + `GUARDIAN_MODEL` (both optional) enable a second, cheap
+model that pre-screens each dangerous call. Clearly-safe and reversible calls
+run without a keyboard; anything risky or uncertain still asks.
+
+- It runs on a **separate model from the agent's** — a judge that costs the same
+  as the work is a second copy of the task, not a judge.
+- It can only lower friction on calls the user would have approved anyway. It
+  cannot authorize what the blocklist refuses: `rm -rf /`, `mkfs`, `dd of=/dev/`,
+  fork bombs, `curl|sh` are rejected before the guardian even runs.
+- A dead guardian fails closed — `null` verdict means ask. An unreachable judge
+  never becomes an open gate.
+
+```bash
+# .env
+GUARDIAN_PROVIDER=cheap        # must differ from the agent's provider
+GUARDIAN_MODEL=gpt-4o-mini     # cheap, 8 tokens of output
+```
 
 ## The progress message
 

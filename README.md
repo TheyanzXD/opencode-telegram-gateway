@@ -10,7 +10,7 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🖼 **Vision** — image attachments forwarded to vision-capable models automatically; override via `VISION_PROVIDER`/`VISION_MODEL`.
 - ⚡ **Streaming** — Telegram edit-in-place as the model types.
 - 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS). Authenticated premium proxies (`user:pass@ip:port`) load from a local gitignored file via `PROXY_PREMIUM_FILE`.
-- 🖥 **Headless browser** — `/browse` drives real Chromium: open, read, snapshot (`@eN` refs), click, type, screenshot, eval. Same `agent-browser` stack Hermes Agent uses. Bundled — `npm ci` installs the CLI, Chromium fetches on first use.
+- 🖥 **Headless browser as agent tools** — `/agent` drives a real anti-detect browser itself: `browser_navigate`, `browser_snapshot` (stable `@eN` element refs), `browser_click`, `browser_type`, `browser_read`, `browser_search`. One Camoufox session per chat. Same pattern as Hermes Agent — the model calls the tools, no `/browse` command to paste.
 - 🤖 **Agent mode** — `/agent <task>` runs a tool-calling loop: `execute_bash`, `read/write/edit_file`, `list_dir`, `sysinfo`, `web_search`, `fetch_url`. Destructive tools pause for a one-tap approval (inline keyboard), progress streams into one message. Off by default (`AGENT_ENABLED=true` to enable). See [docs/agent.md](docs/agent.md).
 - 🐛 **Self-healing debugger** — every error is classified (network / timeout / auth / rate-limit / syntax / missing-module), retryable ones retry in-place up to 2× per turn honoring `Retry-After`, and each run leaves a `/debug` trace of provider calls, tool calls, and approvals.
 - 🧩 **Plugins** — drop a `.js` file into `plugins/` to add tools, middleware, or a message hook. One broken plugin is skipped, not fatal. See [docs/plugins.md](docs/plugins.md).
@@ -97,11 +97,14 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /model list <p>      Live model list from the provider itself
 /model add <p/m>     Register a new model (admin) — e.g. /model add groq/new-model 128000
 /models              List every registered model
-/browse [...]         Headless browser — see below
-/browse open <url>    Open a page, then snapshot/click/type/read it
-/agent <task>         Tool-calling agent — shell, files, web search (see docs/agent.md)
+/agent <task>         Tool-calling agent — shell, files, browser, web search
+                       browser tools: browser_navigate, browser_snapshot
+                       (@eN refs), browser_click, browser_type, browser_read,
+                       browser_search — see docs/agent.md
 /abort                Cancel the running /agent in this chat
-/tools                List the agent's tools
+/tools                List every tool the agent can call
+/yolo on|off          Auto-approve dangerous tools (skip the keyboard)
+/estop                Emergency stop — cancel everything now
 /temperature <0-2>   Set temperature
 /system <prompt>     Set system prompt
 /reset               Clear history of active session
@@ -248,8 +251,8 @@ providers:
 - [`prompts/default.md`](prompts/default.md) — the default system prompt, annotated. Live version: `SYSTEM_PROMPT` in `.env`
 - [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
 - [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
-- [`docs/browser.md`](docs/browser.md) — `/browse`, headless Chromium via agent-browser
-- [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and why the bot can't run shell commands
+- [`docs/browser.md`](docs/browser.md) — `/browse`: Camoufox (search/browse) + headless Chromium (interactive)
+- [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and what can run shell commands
 
 ## Test
 

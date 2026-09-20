@@ -145,21 +145,21 @@ for the full reference; the critical rules:
   message row carries a `session_id`.
 - `/reset` — wipe the active session's history.
 
-There is no vector store, no embeddings, no skill loader, no
-context-summarizer. If you need long-term recall, add it: `db.js` is
-where a `memories` table would go, and `conversation.js` is where you
-would inject it into the message array. The bot will not do this for
-you.
+There is no vector store and no embeddings. Cross-session memory, skills, and
+context compression do exist — see [`docs/memory-skills-context.md`](docs/memory-skills-context.md)
+for the real design now, not the sketch in that file's earlier drafts.
 
 ## Command execution
 
-**The bot cannot run shell commands.** It has no `child_process`
-import anywhere in `src/`. `npm run doctor`, `npm run proxy`, and
-`npm run setup` are *operator* CLI tools you run in a terminal on the
-host — the bot does not expose them over Telegram.
+`/agent` can run shell commands — that is the point of agent mode, and it is
+gated behind `AGENT_ENABLED=true` plus a per-call approval (see
+[`docs/agent.md`](docs/agent.md)). Outside agent mode the bot still does not
+shell out. `npm run doctor`, `npm run proxy`, and `npm run setup` are *operator*
+CLI tools you run in a terminal on the host — the bot does not expose them over
+Telegram.
 
-The closest thing to host mutation from chat is `/model add` (writes
-`providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
+The closest thing to host mutation from chat, outside `/agent`, is `/model add`
+(writes `providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
 touch only project files.
 
 ## Searching / finding things

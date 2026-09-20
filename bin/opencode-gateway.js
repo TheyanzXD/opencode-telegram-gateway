@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // OpenCode Gateway — CLI entry
+import '../src/bootstrap.js'; // CAMOUFOX_INSTALL_DIR before anything imports camoufox-js
+
 import { run as runBot } from '../src/bot/index.js';
 import { setup } from '../src/cli/setup.js';
 import { doctor } from '../src/cli/doctor.js';

@@ -6,6 +6,7 @@
 import { bashTool } from './tools/bash.js';
 import { fsTools } from './tools/fs.js';
 import { searchTools } from './tools/search.js';
+import { browserTools } from './tools/browser.js';
 import { sysinfoTool } from './tools/sysinfo.js';
 
 export class ToolRegistry {
@@ -51,12 +52,18 @@ export class ToolRegistry {
     return { ok: true, data: r.data };
   }
 
-  /** Run one tool. Never throws — a failure is returned as tool_result content. */
-  async execute(name, args) {
+  /**
+   * Run one tool. Never throws — a failure is returned as tool_result content.
+   * @param {string} name
+   * @param {object} args
+   * @param {{chatId?: number, userId?: number}} [ctx]  session context for
+   *        stateful tools (the browser keeps one page per chat)
+   */
+  async execute(name, args, ctx = {}) {
     const v = this.validate(name, args);
     if (!v.ok) return { content: `⚠️ invalid arguments: ${v.error}`, isError: true };
     try {
-      const out = await this.get(name).execute(v.data);
+      const out = await this.get(name).execute(v.data, ctx);
       return { content: typeof out === 'string' ? out : JSON.stringify(out), isError: false };
     } catch (err) {
       return { content: `⚠️ ${name} failed: ${err.message}`, isError: true };
@@ -65,5 +72,7 @@ export class ToolRegistry {
 }
 
 export function createDefaultRegistry() {
-  return new ToolRegistry([bashTool, ...fsTools, ...searchTools, sysinfoTool]);
+  return new ToolRegistry([
+    bashTool, ...fsTools, ...searchTools, ...browserTools, sysinfoTool,
+  ]);
 }

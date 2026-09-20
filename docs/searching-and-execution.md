@@ -1,9 +1,12 @@
 # Searching & Command Execution
 
-## The bot cannot run commands
+## The bot cannot run commands (outside agent mode)
 
-There is no `child_process` import anywhere in `src/`. The bot never
-shells out. Every "command" in chat is a handler that answers with text:
+`/agent` is the one exception: it runs a real tool loop with a real shell, and
+it is off by default. See [docs/agent.md](agent.md) — every destructive call
+there pauses for an approval.
+
+Everything else in chat is a handler that answers with text. No shelling out:
 
 | Chat command | What it actually does |
 |---|---|
@@ -12,8 +15,11 @@ shells out. Every "command" in chat is a handler that answers with text:
 | `/admin broadcast` | sends N Telegram messages |
 | `/admin export` | zips `data/` → home channel |
 | `/sessions export` | zips one history → home channel |
+| `/browse search` | removed — the browser is agent tools now (`browser_search`) |
+| `/browse browse` | removed — use `browser_navigate` + `browser_read` via `/agent` |
 
-Nothing else touches the host. Even those only read/write project files.
+Nothing else touches the host. Even those only read/write project files, and
+the browser ones are sandboxed to the browser process.
 
 ## CLI tools are operator-only
 

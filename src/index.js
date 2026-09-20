@@ -1,3 +1,5 @@
+import './bootstrap.js'; // sets CAMOUFOX_INSTALL_DIR before camoufox-js is imported anywhere
+
 import { run, shutdown } from './bot/index.js';
 import { logger } from './logger.js';
 import { db } from './db.js';
