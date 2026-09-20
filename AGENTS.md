@@ -162,6 +162,36 @@ The closest thing to host mutation from chat, outside `/agent`, is `/model add`
 (writes `providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
 touch only project files.
 
+## RBAC, undo, and documents
+
+**RBAC** (`src/agent/rbac.js`) is three tiers, and the tier decides what the
+approval gate does:
+
+| env | tier | can |
+| --- | ---- | --- |
+| `TELEGRAM_ALLOWED_USERS` | user | chat with the bot |
+| `TELEGRAM_TOOL_USERS` | trusted | file/terminal tools, dangerous tools without the approval keyboard |
+| `TELEGRAM_ADMIN_USERS` | admin | the above + settings + clearing other users' sessions |
+
+Both tool tiers blank (default): every dangerous tool shows the inline keyboard,
+operator-only tools (`set_quota`, `clear_sessions`) are refused. The check feeds
+the existing gate in `engine.js` — it does not duplicate the approval flow.
+
+**`/undo`** (`src/agent/snapshot.js`). `write_file` and `edit_file` call
+`snapshot()` before they write, so the ring holds the pre-change hash and
+`stashOriginal()` holds the bytes. `/undo` pops the ring and either restores
+(stash exists) or deletes (the entry's hash is null — the file was created by
+the last edit). Ring is per-user, capped 20, and refuses anything outside the
+workspace. If the stash rotated out, it says "no longer recoverable" — it never
+deletes the current file to look busy.
+
+**Documents** (`src/bot/handlers/document.js`). `message:document` extracts a
+zip into `workspace/<id>/<name>/` or saves a code/text file as-is, then replies
+with what landed. Zip-slip is validated by name *before* the system `unzip`
+runs — `isSafeName` resolves against a synthetic base, because
+`path.resolve('/', '../../x')` clamps to root and reads as safe. Over 8 MB is
+refused with the reason being the context window, not disk.
+
 ## Browser
 
 There is no `/browse` command. The browser is agent tools — the model calls

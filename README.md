@@ -39,6 +39,9 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🧩 **MCP client** — `MCP_SERVERS` turns every MCP server on npm into agent tools. Stdio and HTTP transports.
 - 👶 **Subagent delegation** — `delegate_task` runs an independent subtask in its own context window and returns only the summary (max depth 2, read-only by default).
 - 💾 **Long-term memory** — `remember`/`recall` durable facts, `record_lesson` a failed approach + the fix, `record_decision` the why-not log, `scratchpad_*` working state out of the context window.
+- 🔐 **RBAC** — three tiers: chat access (`TELEGRAM_ALLOWED_USERS`), tool access (`TELEGRAM_TOOL_USERS`), operators (`TELEGRAM_ADMIN_USERS`). Dangerous tools need a one-tap approval unless the user is trusted.
+- ↩️ **`/undo`** — every mutating tool snapshots first; one command restores the last change in this user's workspace. Overwritten files go back, created files are removed.
+- 📎 **Document ingestion** — drop a `.zip` or a code file into the chat and it lands in the workspace. Zip-slip entries are refused before extraction; over-8 MB is refused with a reason.
 - 🔍 **Observability** — `trace_export` a full turn trace, `cost_report` the spend breakdown. Per-user workspace isolation for every tool that touches disk.
 
 See [docs/features.md](docs/features.md) for the full reference.

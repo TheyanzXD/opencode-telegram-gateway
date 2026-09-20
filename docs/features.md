@@ -208,3 +208,37 @@ it is never told a capability it does not have.
 
 The brief is cached 30s and sits inside the cached prefix, so it costs once per
 conversation, not once per turn.
+
+## RBAC, undo, and document ingestion
+
+**RBAC — who may run tools.** Chat access (`TELEGRAM_ALLOWED_USERS`) and tool
+access are separate tiers, because a bot that answers questions is a different
+trust level from a bot that runs shell commands.
+
+- `TELEGRAM_TOOL_USERS` — these users run file/terminal tools and receive
+  dangerous-tool approval prompts directly.
+- `TELEGRAM_ADMIN_USERS` — the tier above: can also change bot settings and
+  clear other users' sessions.
+- Both blank (default) — dangerous tools require the inline-keyboard approval
+  from any user, and operator-only tools (`set_quota` and friends) are refused.
+
+The check lives in `src/agent/rbac.js` and feeds the existing approval gate:
+trusted users skip the keyboard, everyone else gets `[Approve] / [Reject]`.
+
+**`/undo` — the way back.** Every mutating tool (`write_file`, `edit_file`)
+snapshots the file into `workspace/<id>/.undo/` before it writes. `/undo`
+restores the most recent change — an overwritten file goes back to its previous
+content, a newly created file is deleted. The ring is per-user, capped at 20
+entries, and refuses paths outside the workspace. It says what is true: if the
+previous state rotated out of the ring, it returns "no longer recoverable"
+rather than deleting the current file.
+
+**Document ingestion.** A file dropped into the chat lands in the workspace and
+becomes part of the agent's context.
+
+- `.zip` — extracted preserving the tree. Zip-slip entries are validated
+  *before* the system `unzip` ever runs, and refused one at a time so one
+  hostile entry does not abort the ninety honest ones.
+- code and text (`.js .py .md .json .yaml .txt …`) — saved as-is.
+- over 8 MB — refused with a reason: the limit is the context window, not disk.
+- anything else — refused with a suggestion, never silently ignored.

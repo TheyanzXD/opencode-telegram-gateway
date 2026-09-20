@@ -12,6 +12,7 @@ import { createDefaultRegistry } from './registry.js';
 import { createApproval, gateDecision } from './approvals.js';
 import { guardianVerdict } from './approval-smart.js';
 import { analyze } from '../debugger/error-analyzer.js';
+import { canRunDangerous, toolDeniedFor } from './rbac.js';
 import { Tracer } from '../debugger/tracer.js';
 import { logger } from '../logger.js';
 
@@ -138,12 +139,23 @@ export class AgentEngine {
         // A tool is gated when it is dangerous, or when this specific call hits a
         // dangerous path — browser_console is read-only, but its `evaluate` runs
         // arbitrary JS in the page and must not slip past the gate.
+        // RBAC: an operator-only tool is refused outright, not asked about.
+        if (toolDeniedFor(userId, name)) {
+          const out = '⛔ this tool is operator-only — your account is not permitted to run it';
+          this.onEvent({ type: 'toolEnd', tool: name, output: out, denied: true });
+          this.tracer.toolCall(name, 0, false, out);
+          convo.push(this.toolResult(call.id, name, out));
+          continue;
+        }
         const dangerous = tool?.isDangerous || (typeof tool?.requiresApproval === 'function' && tool.requiresApproval(args));
         if (dangerous) {
           // Ask the guardian (cheap model) whether a human needs to look at this.
           // Unavailable or unsure → null → gateDecision falls back to 'ask'.
           const verdict = await guardianVerdict(name, args);
-          const decision = gateDecision(userId, name, verdict);
+          // RBAC decides who needs a keyboard at all: a trusted role skips it,
+          // the same way /yolo does. gateDecision already honors the yolo flag,
+          // so this extends that one decision instead of forking the path.
+          const decision = canRunDangerous(userId) ? 'allow' : gateDecision(userId, name, verdict);
           this.tracer.span('gate', { tool: name, verdict, decision });
 
           if (decision === 'allow') {

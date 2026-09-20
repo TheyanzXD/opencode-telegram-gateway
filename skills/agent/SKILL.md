@@ -5,7 +5,7 @@ when: agent|tools|tool list|what can you do
 version: 1.0
 ---
 
-The agent has 58 tools. Grouped by what they do; read-only ones do not need
+The agent has 60 tools. Grouped by what they do; read-only ones do not need
 approval, mutating ones do.
 
 **Shell & execution**
@@ -61,6 +61,10 @@ approval, mutating ones do.
 - `ask_user` — stop and wait for an answer. Choice buttons or a typed reply.
   Use it instead of guessing when the decision is theirs
 - `todowrite` / `todoread` — the session task list, visible as /todo
+- the user can drop a `.zip` or code file into the chat; it lands in the
+  workspace as real files, so tell them to do that instead of pasting a wall of
+  code. `/undo` restores the last change you made in their workspace — offer it
+  when a refactor goes sideways.
 
 Choose by blast radius: read first (`read_file`, `list_dir`, `browser_read`),
 then act (`multi_edit` over repeated `edit_file`, `job_start` for anything

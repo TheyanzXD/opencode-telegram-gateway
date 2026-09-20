@@ -54,6 +54,9 @@ export const config = {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     allowed: csv(process.env.TELEGRAM_ALLOWED_USERS),
     admins: csv(process.env.TELEGRAM_ADMIN_USERS),
+    // The tier below admin: these ids run dangerous tools without an approval
+    // keyboard. Empty (default) = everyone is asked. See src/agent/rbac.js.
+    toolUsers: csv(process.env.TELEGRAM_TOOL_USERS),
     homeChannel: process.env.TELEGRAM_HOME_CHANNEL || null,
   },
   defaults: {

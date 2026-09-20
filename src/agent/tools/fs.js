@@ -8,6 +8,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { z } from 'zod';
 import { workspaceFor } from '../workspace.js';
+import { snapshot, stashOriginal } from '../snapshot.js';
 
 const MAX_READ = 200 * 1024; // 200 KB into context; larger needs an explicit range
 
@@ -92,6 +93,10 @@ export const fsTools = [
     async execute({ path: p, content }, ctx = {}) {
       const abs = safe(p, ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
+      // Snapshot the prior state so /undo can reach it. A failure here does
+      // not block the write — undo is a convenience, not a guarantee.
+      snapshot(p, ctx.userId ?? ctx.chatId);
+      stashOriginal(p, ctx.userId ?? ctx.chatId);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, content, 'utf8');
       return `wrote ${content.length} bytes to ${p}`;
@@ -121,6 +126,8 @@ export const fsTools = [
       const replace_all = args.replace_all;
       const abs = safe(p, ctx);
       if (!abs) return `refused: path escapes the workspace: ${p}`;
+      snapshot(p, ctx.userId ?? ctx.chatId);
+      stashOriginal(p, ctx.userId ?? ctx.chatId);
       const text = await fs.readFile(abs, 'utf8');
       const occurrences = text.split(old).length - 1;
       if (occurrences === 0) return `old string not found in ${p}`;
