@@ -22,6 +22,23 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 📜 **Pino logging** — pretty in dev, JSON in prod, redact `apiKey` automatically.
 - 🧙 **CLI setup wizard** — `npm run setup` walks you through bot token, providers, defaults. No config files to handcraft.
 - 🩺 **Doctor** — `npm run doctor` validates everything and pings each provider with a real prompt.
+- 💰 **Cost & quota** — `/usage` shows per-day and per-model spend; `QUOTA_DAILY_TOKENS` caps a user's daily tokens and `/quota <userId> <n>` overrides one user without a restart.
+- ⏹ **Stop & regenerate** — every streaming reply has a ⏹ button (keeps the partial text); ↻ regenerates from the stored prompt. Editing your own message regenerates it too.
+- 🧵 **Reply chains** — reply to an old message and the turns around it come back into context. Forum topics are separate conversations.
+- 🧠 **Personality** — `/soul set <markdown>` writes a personality file that becomes the base system prompt. Per-user, versionable, see [docs/personality.md](docs/personality.md).
+- 📌 **Pin & search** — `/pin` keeps a turn in every prompt; `/search <text>` is FTS5 across your whole history and pins.
+- 🔑 **Bring-your-own-key** — `/key set <provider> <key>` bills a user's turns to their own account, with their own fallback chain (`/key chain`).
+- 🌐 **Inline mode** — `@botname <prompt>` answers from any chat. Multi-language UI: `/lang en|id|es|ru|ja`.
+- 📤 **Outbound webhooks** — `WEBHOOK_SUBSCRIBERS` fires signed events on quota hits, agent turns, and more.
+- 🔁 **Fallback chain** — `FALLBACK_CHAIN=provider:model,...` steps down on hard failure, retries once on transient. A stream that already produced text never switches models.
+- 🩺 **Webhook + health + watchdog** — `WEBHOOK_URL` switches off polling; `GET /health` returns 200/503; the watchdog flags a silent process. `SIGHUP` reloads config without dropping connections.
+- 🔒 **Secret redaction + DLQ** — credential-shaped strings are masked before any log, reply, or webhook; a turn that fails every fallback lands in the dead-letter queue for replay.
+- 🧩 **MCP client** — `MCP_SERVERS` turns every MCP server on npm into agent tools. Stdio and HTTP transports.
+- 👶 **Subagent delegation** — `delegate_task` runs an independent subtask in its own context window and returns only the summary (max depth 2, read-only by default).
+- 💾 **Long-term memory** — `remember`/`recall` durable facts, `record_lesson` a failed approach + the fix, `record_decision` the why-not log, `scratchpad_*` working state out of the context window.
+- 🔍 **Observability** — `trace_export` a full turn trace, `cost_report` the spend breakdown. Per-user workspace isolation for every tool that touches disk.
+
+See [docs/features.md](docs/features.md) for the full reference.
 
 ## Quick start (no root)
 
@@ -66,6 +83,20 @@ Premium entries are seeded ahead of the public lists, so per-chat rotation prefe
 
 `better-sqlite3` builds natively but `npm ci` handles it via prebuilt binaries for the common Node versions — no `apt`, no `sudo`, no system packages.
 
+## Skills
+
+`skills/` holds markdown knowledge the bot injects only when a turn matches it.
+Each is a directory with a `SKILL.md` frontmatter (`name`, `description` ≤ 60
+chars, `when` patterns). Four ship with the repo:
+
+- **agent-tools** — the 50-tool catalog with blast radius
+- **camoufox-antidetect** — browser blocks, known walls, session rules
+- **context-budget** — where the tokens go and how the cache stays warm
+- **telegram-markdown** — MarkdownV2 escaping rules
+
+Add your own: `mkdir skills/<name>`, write a `SKILL.md`, restart. A skill that
+fails validation is skipped with a warning, never fatal.
+
 ## CLI
 
 ```
@@ -104,6 +135,14 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /reset               Clear history of active session
 /history             Show last 10 messages
 /about               Bot info + stats
+/usage               Your token spend (24h / 7d / all time, by model)
+/soul [set|append|clear]  Personality file — becomes the base prompt
+/key set <p> <k> [url] [models]  Use your own API key
+/key chain <p:m,...>      Your own fallback chain
+/lang <code>         Bot UI language: en id es ru ja
+/pin [note]          Pin the replied message into every prompt
+/search <text>       Full-text search across your history
+/export              Download the conversation (.md + .json)
 ```
 
 ### Sessions (`/sessions …`)

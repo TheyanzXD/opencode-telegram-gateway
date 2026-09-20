@@ -1,0 +1,52 @@
+---
+name: agent-tools
+description: Names and purpose of every agent tool. Load to list tools.
+when: agent|tools|tool list|what can you do
+version: 1.0
+---
+
+The agent has 50 tools. Grouped by what they do; read-only ones do not need
+approval, mutating ones do.
+
+**Shell & execution**
+- `execute_bash` — a shell in your workspace, blocked patterns refused
+- `execute_python` — python3, output capped
+- `execute_node` — `node:vm` sandbox, synchronous, no fs/child_process
+- `job_start` / `job_status` / `job_output` / `job_kill` — long-running work
+  that outlives the 30s tool budget
+- `git` — git in the workspace, refuses force/reset --hard/clean -fx
+- `sysinfo` — host, runtime, memory, load
+
+**Files**
+- `read_file` / `write_file` / `edit_file` / `list_dir`
+- `multi_edit` — N edits to one file, atomic: all land or none do
+- `diff_review` / `diff_reject` — numbered hunks, reject one keep the rest
+- `ast_edit` — identifier rename that skips strings and comments
+- `run_tests` — auto-detects pytest/jest/go/cargo
+- `compile_run` — rustc/go/gcc with line:column errors
+- `send_document` — deliver a workspace file to the chat
+
+**Memory & knowledge**
+- `remember` / `recall` / `forget` — durable facts across /reset and restart
+- `record_lesson` / `recall_lesson` — a failed approach and the fix
+- `record_decision` — why one path was taken, readable via /why
+- `scratchpad_write/read/list/delete` — working state out of the context window
+
+**Browser** (Camoufox, session per chat)
+- `browser_navigate` / `browser_snapshot` (@eN refs) / `browser_read`
+- `browser_click` / `browser_type` (dangerous)
+- `browser_search` / `browser_close`
+- `browser_wait` / `browser_scroll` / `browser_keyboard` / `browser_form`
+- `browser_extract` / `browser_console` / `browser_screenshot` / `browser_tabs`
+
+**Delegation**
+- `delegate_task` — a subagent with its own context window for an independent
+  subtask. Read-only tools by default, max depth 2.
+
+**Observability**
+- `trace_export` — the full trace of a turn as JSON/Markdown/text
+- `cost_report` — spend breakdown per model and per tool
+
+Choose by blast radius: read first (`read_file`, `list_dir`, `browser_read`),
+then act (`multi_edit` over repeated `edit_file`, `job_start` for anything
+over a few seconds). Never `rm` in bash when `edit_file` will do.

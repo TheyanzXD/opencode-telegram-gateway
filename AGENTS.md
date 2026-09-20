@@ -194,3 +194,60 @@ node -e "const db=require('better-sqlite3')('./data/gateway.db'); console.log(db
 ```
 
 See `docs/` for the deep dives.
+
+## Feature surface (post-expansion)
+
+The bot grew past relay + agent. This is the map so you do not grep for it.
+
+**Commands** — `/usage`, `/quota` (admin), `/key`, `/lang`, `/soul`, `/pin`,
+`/search`, `/export`, plus the existing set. Full reference: `docs/features.md`.
+
+**Agent tools** — 50 of them now. The catalog with blast radius:
+`skills/agent/SKILL.md` (it is a skill so the model can look it up too).
+
+**New subsystems and their entry points**
+
+```
+src/agent/workspace.js        per-user workspace isolation (bash + fs)
+src/agent/personality.js      soul.md loader
+src/agent/subagent-runner.js  delegated subtask execution
+src/mcp/client.js             MCP stdio + HTTP client
+src/providers/fallback.js     model fallback chain + degradation report
+src/providers/keys.js         BYO keys, secret redaction, dead letter queue
+src/bot/features/threads.js   reply chains, regenerate, stop, expiry, export
+src/bot/features/inline.js    inline mode, forum topics, edit detection
+src/bot/features/i18n.js      UI strings (en/id/es/ru/ja)
+src/bot/features/webhooks.js  outbound events, signed, retried
+src/bot/features/pinned.js    /pin + FTS5 history search
+src/bot/health.js             webhook mode, /health, watchdog, SIGHUP reload
+src/bot/commands/usage.js     /usage + /quota
+src/bot/commands/account.js   /lang + /key
+src/bot/commands/soul.js      /soul
+src/bot/commands/search.js    /pin + /search
+src/agent/observability/      trace store, collector, export, pricing
+src/agent/store-kv.js         the agent's own sqlite handle (lt_memory, lessons,
+                             decisions, scratchpad) — kept off db.js on purpose
+```
+
+**Two databases.** `db.js` owns chat (users, messages, sessions, usage,
+proxies). `store-kv.js` owns agent state (long-term memory, lessons,
+decisions, scratchpad, quota overrides, DLQ, pins). Separate handles mean a
+bad agent migration cannot take the chat tables down with it.
+
+**Approval gating.** `browser_click`, `browser_type`, `multi_edit`,
+`ast_edit`, `write_file`, `edit_file`, `execute_bash`, `git`, `compile_run`
+are `isDangerous`. The guardian pre-screens; clearly-safe ones skip the
+keyboard, anything unsure still asks. `/yolo` disables the gate entirely and
+`/estop` kills the loop.
+
+**SIGHUP, not restart.** `kill -HUP <pid>` clears the provider and config
+caches. Use it for providers.yaml and .env changes — no connection drops.
+`SIGUSR2` logs a state snapshot.
+
+**Known limits**
+- Google search is IP-blocked (`/sorry`) on datacenter ranges. DDG HTML is
+  the default engine. This is an egress problem, not a fingerprint one —
+  see `skills/camoufox-antidetect/SKILL.md`.
+- `execute_node` is synchronous by construction (`node:vm` has no event loop
+  in the sandbox). Async code belongs in `execute_bash` or `job_start`.
+- MCP client speaks `tools` only — no `resources`, no `prompts`, no sampling.

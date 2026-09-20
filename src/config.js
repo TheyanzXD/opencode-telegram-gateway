@@ -86,7 +86,8 @@ export const config = {
     // Must be a DIFFERENT (cheaper) model than the agent's.
     guardianProvider: process.env.GUARDIAN_PROVIDER || '',
     guardianModel: process.env.GUARDIAN_MODEL || '',
-    skillRoot: process.env.SKILLS_DIR || '',
+    // skills live in ./skills by default; SKILLS_DIR moves them elsewhere
+    skillRoot: process.env.SKILLS_DIR || path.join(ROOT, 'skills'),
     // session expiry: history older than this is forgotten (default 30d)
     sessionTtlDays: int(process.env.SESSION_TTL_DAYS, 30),
     // DLQ + secret redaction are always on; these only tune the noise level

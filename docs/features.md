@@ -1,0 +1,151 @@
+# Bot features
+
+Everything the bot itself does, in addition to relaying prompts.
+
+## Conversation
+
+| Command | What it does |
+| --- | --- |
+| `/reset` | Start a fresh session |
+| `/history` | Recent turns |
+| `/sessions` | List past sessions |
+| `/export` | Download the conversation as `.md` and `.json` |
+| `/pin` | Pin the replied message — it stays in every prompt |
+| `/pin list` | Show your pins |
+| `/search <text>` | Full-text search across your history and pins |
+| `/soul` | Show your personality file |
+| `/soul set <md>` | Replace your personality — it becomes the base system prompt |
+| `/soul append <md>` | Add to your personality |
+| `/soul clear` | Back to the default personality |
+
+Reply to any bot message to regenerate it — the ↻ button does it in one tap,
+and `/pin` on that reply keeps it.
+
+Replying to an older message pulls the turns around it into context, so you
+can continue an old thread without retyping it. Editing your own message
+regenerates the answer from the new text.
+
+⏹ Stop appears on every streaming reply and cancels the generation, keeping
+whatever was already written.
+
+## Account
+
+| Command | What it does |
+| --- | --- |
+| `/usage` | Your token spend — 24h, 7d, all time, broken down by model |
+| `/quota` (admin) | List or set per-user daily token limits |
+| `/key set <provider> <key> [base_url] [models]` | Use your own API key |
+| `/key chain <provider:model,...>` | Your own fallback chain |
+| `/key clear` | Back to the operator's shared key |
+| `/lang <code>` | Bot UI language: `en`, `id`, `es`, `ru`, `ja` |
+
+`/key` means your turns are billed to your own account and you can pick models
+the operator does not offer. The key is stored once and never shown again —
+`/key` displays its settings, not the secret.
+
+## Quota
+
+`QUOTA_DAILY_TOKENS` sets the default daily limit for every user. When a user
+hits it, the turn is refused before it costs anything:
+
+```
+⛔ Daily token quota reached. Resets at 00:00 UTC.
+```
+
+An operator can raise one user without touching `.env`:
+
+```
+/quota 123456789 2000000
+```
+
+Use `0` for unlimited.
+
+## Inline mode
+
+Type `@botname <prompt>` in any chat — including a chat the bot is not in.
+The bot does one non-streaming completion and returns it as a sendable result.
+`INLINE_TIMEOUT_MS` caps how long it waits (default 12s) so the query never
+hangs a chat.
+
+## Forum topics
+
+In a group with topics enabled, each topic is its own conversation. A reply in
+topic 12 does not see the history of topic 7.
+
+## Fallback chain
+
+`FALLBACK_CHAIN` is a comma-separated list of `provider:model` pairs tried in
+order when the primary fails. Transient errors (timeout, 429, 5xx) retry once
+on the same model before stepping down; hard errors step down immediately. A
+stream that already produced text never switches models mid-answer — you see
+one continuous reply, not a splice.
+
+```
+FALLBACK_CHAIN=openai:gpt-4o,anthropic:claude-3-5-sonnet,openrouter:auto
+```
+
+## Webhook mode
+
+Polling is the default. Set `WEBHOOK_URL` to switch:
+
+```
+WEBHOOK_URL=https://your.host/tg
+WEBHOOK_PORT=8443
+WEBHOOK_SECRET=<random string>
+```
+
+grammy registers the webhook itself. Health endpoint on the same port:
+
+```
+GET /health → 200 {"ok": true, ...}
+            → 503 {"ok": false, "degraded": [{"name": "vision", ...}]}
+```
+
+## Watchdog
+
+A live process doing nothing is worse than a crash — nothing restarts it. If
+the bot produces no output for `WATCHDOG_SILENT_MINUTES` (default 30),
+`/health` reports 503 so an external probe can act on it.
+
+## Zero-downtime reload
+
+```
+kill -HUP <pid>
+```
+
+Clears the provider and config caches. Changes to `providers.yaml` or `.env`
+take effect on the next request without dropping any connection.
+
+`SIGUSR2` logs a state snapshot (uptime, health, proxy pool) instead.
+
+## Outbound webhooks
+
+`WEBHOOK_SUBSCRIBERS` is a JSON array of external endpoints to notify about
+gateway events:
+
+```json
+[{"url": "https://hook.example.com/gateway", "secret": "shared", "events": ["quota.reached", "agent.turn.done"]}]
+```
+
+Deliveries are HMAC-SHA256 signed (`X-Gateway-Signature: sha256=…`), retried
+with exponential backoff, and a subscriber that keeps failing is dropped from
+the batch, not the turn. Events are redacted — no credential key leaves the
+process.
+
+## Session expiry
+
+History older than `SESSION_TTL_DAYS` (default 30) is deleted on startup and
+every six hours. Long-dead context is noise that costs tokens every turn.
+
+## Secret redaction
+
+Anything credential-shaped is masked before it reaches a log line, a chat
+reply, or a webhook payload: `sk-*`, `ghp_*`, `AIza*`, JWTs, `user:pass@ip`
+proxy credentials, and `Authorization:`/`api_key:` headers. A stack trace
+that contains an auth header is how keys leak; this is the filter that stops it.
+
+## Dead letter queue
+
+A turn that fails *every* model in the fallback chain is not dropped. It is
+written to the `dlq` table with its full request, so the operator can replay
+it once the provider is back instead of asking the user to retype it.
