@@ -9,6 +9,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { stealthFlags, randomUserAgent } from './stealth.js';
+import { engineChain } from './search.js';
+import { rotatedChatProxy } from '../proxy/pool.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -104,6 +109,9 @@ export async function browserCommand(args, { chatId = 0, timeoutMs = 60_000 } = 
       markReady();
     }
 
+    // /search is a compound command: it walks the engine fallback chain.
+    if (cmd === 'search') return searchCommand(rest, { chatId, timeoutMs });
+
     const r = await browserExec([cmd, ...rest], { timeoutMs });
 
     if (!r.ok) {
@@ -119,6 +127,100 @@ export async function browserCommand(args, { chatId = 0, timeoutMs = 60_000 } = 
     if (cmd === 'read')      return `📄 ${out.trim()}`;
     return `✅ \`${cmd}\`\n${out}`.trimEnd();
   });
+}
+
+/**
+ * /search <query> — try engines in quality order, stop at the first one that
+ * returns results. An engine that serves a captcha or a /sorry redirect is
+ * blocked on this IP, and retrying it is wasted time.
+ */
+async function searchCommand(rest, { chatId, timeoutMs }) {
+  const query = rest.join(' ').trim();
+  if (!query) return 'Usage: `/browse search <query>`';
+
+  const proxy = config.proxy.enabled ? rotatedChatProxy(chatId) : null;
+  const hasResidential = Boolean(proxy && /^socks5/.test(proxy));
+  const chain = engineChain({ hasResidentialProxy: hasResidential });
+
+  for (const engine of chain) {
+    const url = engine.url(query);
+    const flags = stealthFlags({ proxy: proxy || undefined });
+    const r = await browserExec(['open', url, ...flags], { timeoutMs });
+
+    if (!r.ok) {
+      logger.warn({ engine: engine.id, code: r.code }, 'search engine unreachable, next');
+      continue;
+    }
+
+    // a navigation that "succeeded" can still land on a bot wall — read the
+    // page and look for the wall markers before trusting it
+    const page = await browserExec(['read'], { timeoutMs: 20_000 });
+    const text = clean(page.stdout || '');
+    if (isBotWall(text, url)) {
+      logger?.warn?.({ engine: engine.id }, 'search engine served a bot wall, next');
+      continue;
+    }
+
+    const results = parseSearchResults(text, engine.id);
+    if (results.length) {
+      return `🔍 *${engine.label}* — \`${query}\`\n\n` + results.slice(0, 8).map(
+        (x, i) => `${i + 1}. [${x.title}](${x.url})\n   ${x.snippet}`,
+      ).join('\n\n');
+    }
+
+    // page loaded, no wall, but no results parsed — the markup changed or the
+    // engine returned nothing. Try the next engine rather than reporting empty.
+    logger?.warn?.({ engine: engine.id }, 'search engine returned no parseable results, next');
+  }
+
+  return `❌ No search engine returned results for \`${query}\`.\nTry \`/browse open https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}\` manually.`;
+}
+
+/**
+ * Wall markers. Google's is a redirect to /sorry with an interstitial; the
+ * others are challenge pages with distinctive copy.
+ */
+function isBotWall(text, url) {
+  if (/\/sorry\/index/i.test(url)) return true;
+  const t = text.toLowerCase();
+  if (/unusual traffic from your computer network/i.test(t)) return true;
+  if (/our systems have detected unusual traffic/i.test(t)) return true;
+  if (/checking your browser before accessing/i.test(t)) return true;
+  if (/enable javascript and cookies to continue/i.test(t)) return true;
+  if (/verify you are human/i.test(t) && t.length < 4000) return true;
+  return false;
+}
+
+/** Pull (title, url, snippet) triples out of the result page text. */
+function parseSearchResults(text, engineId) {
+  const out = [];
+  const lines = (text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+
+  if (engineId === 'brave') {
+    // brave's readable text runs: <title>\n<url>\n<snippet>\n\n...
+    for (let i = 0; i < lines.length - 2 && out.length < 12; i++) {
+      const url = lines[i + 1];
+      if (!/^https?:\/\//.test(url)) continue;
+      if (url.includes('search.brave.com')) continue;
+      const title = lines[i];
+      const snippet = lines[i + 2] || '';
+      if (title && title.length > 3) out.push({ title, url, snippet });
+      i += 2;
+    }
+    return out;
+  }
+
+  // ddg html/lite: result links appear as URL lines too
+  for (let i = 0; i < lines.length - 1 && out.length < 12; i++) {
+    const url = lines[i];
+    if (!/^https?:\/\//.test(url)) continue;
+    if (/duckduckgo\.com/i.test(url)) continue;
+    const title = lines[i - 1] || url;
+    const snippet = lines[i + 1] || '';
+    out.push({ title: title.length > 3 ? title : url, url, snippet });
+    i += 1;
+  }
+  return out;
 }
 
 function renderSnapshot(out) {
@@ -150,7 +252,9 @@ function dedupe(arr) {
 export function usageMarkdown() {
   return `*Browser commands*
 
-\`/browse open <url>\`      Open URL in headless Chromium
+\`/browse search <q>\`    🔍 Search — Camoufox anti-detect Firefox
+\`/browse browse <url>\`   📄 Read a page — Camoufox
+\`/browse open <url>\`     Open URL in headless Chromium
 \`/browse read\`            Extract page text
 \`/browse snapshot\`        List interactive elements as \`@eN\` refs
 \`/browse click <ref|sel>\` Click an element or \`@eN\` ref
@@ -163,7 +267,10 @@ export function usageMarkdown() {
 \`/browse url\`             Current URL
 \`/browse close\`           Close the session
 
-**Flow:** \`/browse open <url>\` → \`/browse snapshot\` → \`/browse click @e5\` → \`/browse read\`
+*Search engines* try in order (datacenter IPs are blocked at Google):
+Brave → DuckDuckGo HTML → DDG Lite. The first one that returns results wins.
+
+**Flow:** \`/browse search <q>\` → pick a result → \`/browse browse <url>\`
 
 One session per chat — state persists between commands until \`/browse close\`.`;
 }
@@ -188,6 +295,7 @@ export const BROWSER_SAFE_CMDS = new Set([
   'open', 'read', 'click', 'type', 'fill', 'press', 'hover', 'check', 'uncheck',
   'select', 'scroll', 'scrollintoview', 'wait', 'screenshot', 'snapshot', 'eval',
   'close', 'back', 'forward', 'reload', 'find', 'get', 'is', 'url', 'title',
+  'search', 'browse',
 ]);
 
 export async function browserSafe(args, { chatId = 0, timeoutMs = 90_000 } = {}) {
@@ -195,11 +303,39 @@ export async function browserSafe(args, { chatId = 0, timeoutMs = 90_000 } = {})
   if (!BROWSER_SAFE_CMDS.has(cmd)) {
     return `❌ Unknown command: \`${cmd || '(none)'}\` — try \`/browse\` with no arguments.`;
   }
+
+  // /browse search and /browse browse use the Camoufox backend (anti-detect
+  // Firefox). On this VPS, headless Chromium is hard-blocked by Google and
+  // captcha-walled by Brave; Camoufox with a real Windows fingerprint gets
+  // through the browser checks, and the engine chain handles the IP.
+  if (cmd === 'search') return camouSearchCommand(rest);
+  if (cmd === 'browse') return camouBrowseCommand(rest);
+
   // 'url' and 'title' are agent-browser `get` subcommands, not top-level ones
   if (cmd === 'url' || cmd === 'title') {
     return browserCommand(['get', cmd, ...rest], { chatId, timeoutMs });
   }
   return browserCommand([cmd, ...rest], { chatId, timeoutMs });
+}
+
+async function camouSearchCommand(rest) {
+  const query = rest.join(' ').trim();
+  if (!query) return 'Usage: `/browse search <query>`';
+  const { camouSearch } = await import('./camoufox.js');
+  const r = await camouSearch(query);
+  if (r.error) return `❌ ${r.error}`;
+  return `🔍 *${r.engine}* — \`${query}\`\n\n` + r.results.slice(0, 8).map(
+    (x, i) => `${i + 1}. [${x.title}](${x.url})\n   ${x.snippet.slice(0, 180)}`,
+  ).join('\n\n');
+}
+
+async function camouBrowseCommand(rest) {
+  const url = rest.join(' ').trim();
+  if (!url) return 'Usage: `/browse browse <url>`';
+  const { camouBrowse } = await import('./camoufox.js');
+  const r = await camouBrowse(url);
+  if (r.error) return `❌ ${r.error}`;
+  return `📄 *${r.title || r.url}*\n${r.url}\n\n${r.text}`.slice(0, 3900);
 }
 
 export { usageMarkdown as usage };

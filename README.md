@@ -38,14 +38,27 @@ You only need two things: a **Telegram bot token** (from [@BotFather](https://t.
 
 ### Optional: headless browser
 
-`agent-browser` is a dependency of the repo, so `npm ci` installs it. It does
-not bundle Chromium (~150 MB) — the first `/browse` fetches it once, or:
+Two browser backends. Install at least the first.
+
+**Camoufox** (anti-detect Firefox) — what `/browse search` and `/browse browse`
+use. On a datacenter IP, plain headless Chromium is hard-blocked by Google and
+captcha-walled by Brave; Camoufox spoofs a real Windows/Firefox fingerprint
+(`navigator.webdriver` false, matching UA/plugins/WebGL), which is what gets
+past those checks.
+
+```bash
+npx camou install
+```
+
+**Chromium** — what `/browse open`, `click`, `type` and the interactive
+commands use. `agent-browser` is a repo dependency, so `npm ci` installs it;
+it does not bundle Chromium (~150 MB), which the first `/browse` fetches once:
 
 ```bash
 npm run browser install
 ```
 
-`/browse open <url>` then works in chat.
+`/browse search <q>` and `/browse browse <url>` then work in chat.
 
 ### Optional: authenticated proxies
 
