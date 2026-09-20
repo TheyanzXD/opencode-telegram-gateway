@@ -23,6 +23,7 @@
     "update-gateway": "node scripts/update.js"
   },
   "dependencies": {
+    "acorn": "^8.14.0",
     "archiver": "^7.0.1",
     "better-sqlite3": "^13.0.3",
     "camou": "^0.13.1",

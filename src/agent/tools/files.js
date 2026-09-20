@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse } from 'acorn';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import { logger } from '../../logger.js';
@@ -229,178 +230,70 @@ export const astEditTool = {
     if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(find)) return `⚠️ invalid identifier: ${find}`;
 
     const src = read(r.abs);
-    // A true AST parse needs a parser dependency. Node cannot parse JS itself,
-    // so fall back to a scope-aware identifier rename: match declarations and
-    // references while skipping comments and strings. This is deliberately
-    // conservative — it refuses rather than mis-edits.
-    const isTs = file.endsWith('.ts');
-    const counted = countIdentifierOccurrences(src, find);
-    if (counted === 0) return `⚠️ "${find}" does not appear in ${file}`;
-    const body = renameIdentifier(src, find, rename_to, isTs);
-    if (body === src) return `⚠️ could not safely rename "${find}" — the identifier only appears in comments or strings. Use edit_file instead.`;
-    write(r.abs, body);
-    return `✅ renamed "${find}" → "${rename_to}" in ${file}`;
-  },
-};
-
-function countIdentifierOccurrences(src, name) {
-  const re = new RegExp(`\\b${name}\\b`, 'g');
-  return (src.match(re) || []).length;
-}
-
-function renameIdentifier(src, name, to, _isTs) {
-  // Strip comments and strings, then rename whole-word occurrences in the
-  // code-only regions. Keeping the originals lets us rebuild the file.
-  const tokens = tokenize(src);
-  return tokens.map((t) => {
-    if (t.kind !== 'code') return t.text;
-    return t.text.replace(new RegExp(`\\b${name}\\b`, 'g'), to);
-  }).join('');
-}
-
-function tokenize(src) {
-  // A small lexer: split into code / string / comment / template regions.
-  // Enough to keep a rename out of literals; not a parser.
-  const out = [];
-  let i = 0;
-  let buf = '';
-  const flush = (kind) => { if (buf) { out.push({ kind, text: buf }); buf = ''; } };
-  while (i < src.length) {
-    const c = src[i];
-    const two = src.slice(i, i + 2);
-    if (two === '//' ) { flush('code'); const j = src.indexOf('\n', i); const end = j === -1 ? src.length : j; out.push({ kind: 'comment', text: src.slice(i, end) }); i = end; continue; }
-    if (two === '/*') { flush('code'); const j = src.indexOf('*/', i + 2); const end = j === -1 ? src.length : j + 2; out.push({ kind: 'comment', text: src.slice(i, end) }); i = end; continue; }
-    if (c === '"' || c === "'") { flush('code'); const end = scanString(src, i, c); out.push({ kind: 'string', text: src.slice(i, end) }); i = end; continue; }
-    if (c === '`') { flush('code'); const end = scanTemplate(src, i); out.push({ kind: 'string', text: src.slice(i, end) }); i = end; continue; }
-    buf += c; i++;
-  }
-  flush('code');
-  return out;
-}
-
-function scanString(src, i, quote) {
-  let j = i + 1;
-  while (j < src.length) {
-    if (src[j] === '\\') { j += 2; continue; }
-    if (src[j] === quote) return j + 1;
-    j++;
-  }
-  return src.length;
-}
-
-function scanTemplate(src, i) {
-  let j = i + 1;
-  while (j < src.length) {
-    if (src[j] === '\\') { j += 2; continue; }
-    if (src[j] === '`') return j + 1;
-    j++;
-  }
-  return src.length;
-}
-
-// ---------------------------------------------------------------- run_tests
-
-const runTestsSchema = z.object({
-  path: z.string().optional(),
-  framework: z.enum(['auto', 'pytest', 'jest', 'go', 'cargo']).optional(),
-});
-
-const FRAMEWORKS = {
-  pytest: { bin: 'python3', args: ['pytest', '-v', '--tb=short'], files: ['pytest.ini', 'setup.py', 'requirements.txt', 'tests/'] },
-  jest: { bin: 'npx', args: ['jest', '--verbose'], files: ['jest.config.js', 'package.json'] },
-  go: { bin: 'go', args: ['test', '-v', './...'], files: ['go.mod'] },
-  cargo: { bin: 'cargo', args: ['test', '--', '--nocapture'], files: ['Cargo.toml'] },
-};
-
-export const runTestsTool = {
-  name: 'run_tests',
-  description: 'Detect the test framework and run the suite. Returns a pass/fail summary per test. Gives the agent a real feedback loop for "fix the failing test". Dangerous: it runs arbitrary test code.',
-  isDangerous: true,
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Subdirectory of the workspace containing the project (default: root)' },
-      framework: { type: 'string', enum: ['auto', 'pytest', 'jest', 'go', 'cargo'], description: 'Force a framework instead of auto-detecting' },
-    },
-    required: [],
-    additionalProperties: false,
-  },
-  schema: runTestsSchema,
-  async execute({ path: rel, framework }, ctx = {}) {
-    const r = resolveInWorkspace(ctx.userId ?? ctx.chatId, rel || '.');
-    if (!r.ok) return `⚠️ ${r.reason}`;
-    if (!fs.existsSync(r.abs)) return `⚠️ no such directory: ${rel}`;
-
-    const fw = pickFramework(r.abs, framework);
-    if (!fw) return `⚠️ no test framework detected in ${rel || 'workspace'} — expected one of: pytest (python), jest (node), go, cargo`;
-    const out = await runChildDetached(fw.bin, [...fw.args], r.abs, 180);
-    return summarize(fw.name, out);
-  },
-};
-
-function pickFramework(dir, forced) {
-  if (forced && forced !== 'auto') return { name: forced, ...FRAMEWORKS[forced] };
-  for (const [name, spec] of Object.entries(FRAMEWORKS)) {
-    if (spec.files.some((f) => fs.existsSync(path.join(dir, f)))) return { name, ...spec };
-  }
-  return null;
-}
-
-function summarize(fw, { code, out }) {
-  const body = (out || '').trim();
-  const passed = (body.match(/✓|\bPASS\b|\bok\b/gi) || []).length;
-  const failed = (body.match(/✗|\bFAIL\b|\bFAILED\b/gi) || []).length;
-  const head = `${fw}: exit ${code} — ${passed} pass / ${failed} fail (heuristic counts)\n\n`;
-  return head + body.slice(0, MAX_READ);
-}
-
-// ---------------------------------------------------------------- compile_run
-
-const compileRunSchema = z.object({
-  file: z.string().min(1),
-  stdin: z.string().optional(),
-  args: z.array(z.string()).optional(),
-});
-
-const LANG = {
-  '.rs': { compile: ['rustc', '-O', '-o'], out: 'prog', run: (bin) => [bin] },
-  '.go': { compile: ['go', 'build', '-o'], out: 'prog', run: (bin) => [bin] },
-  '.c': { compile: ['gcc', '-O2', '-o'], out: 'prog', run: (bin) => [bin] },
-  '.cpp': { compile: ['g++', '-O2', '-o'], out: 'prog', run: (bin) => [bin] },
-};
-
-export const compileRunTool = {
-  name: 'compile_run',
-  description: 'Compile a Rust/Go/C/C++ file and run it. Compiler errors come back with line numbers so you can fix them directly. Dangerous: it compiles and runs untrusted code.',
-  isDangerous: true,
-  parameters: {
-    type: 'object',
-    properties: {
-      file: { type: 'string', description: 'Path relative to the workspace (e.g. main.rs, main.go, prog.c)' },
-      stdin: { type: 'string', description: 'Text to feed to the program on stdin' },
-      args: { type: 'array', items: { type: 'string' }, description: 'Command-line arguments' },
-    },
-    required: ['file'],
-    additionalProperties: false,
-  },
-  schema: compileRunSchema,
-  async execute({ file, stdin, args }, ctx = {}) {
-    const r = resolveInWorkspace(ctx.userId ?? ctx.chatId, file);
-    if (!r.ok) return `⚠️ ${r.reason}`;
-    if (!fs.existsSync(r.abs)) return `⚠️ no such file: ${file}`;
-
-    const spec = LANG[path.extname(r.abs)];
-    if (!spec) return `⚠️ unsupported extension: ${path.extname(r.abs)} — try .rs, .go, .c, .cpp`;
-    const outBin = path.join(path.dirname(r.abs), `${spec.out}-${process.pid}`);
-    const compile = await runChildDetached(spec.compile[0], [...spec.compile.slice(1), outBin, r.abs], path.dirname(r.abs), 90);
-    if (compile.code !== 0) {
-      return `⚠️ compile failed (exit ${compile.code}):\n${(compile.out || '').trim().slice(0, MAX_READ)}\n\nFix the reported line:column errors and try again.`;
+    // True AST parse via acorn. JS/JSX only — the tool says so in its description
+    // rather than silently degrading to the old text-scanning rename.
+    const isJsx = file.endsWith('.jsx') || file.endsWith('.tsx');
+    let ast;
+    try {
+      ast = parse(src, {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        allowReturnOutsideFunction: true,
+        // jsx is not valid acorn input without the jsx plugin; those files are
+        // refused with a clear message instead of a parse crash.
+        allowHashBang: true,
+      });
+    } catch (err) {
+      return isJsx
+        ? `⚠️ ${file} is JSX — ast_edit handles plain JS/TS. Use edit_file.`
+        : `⚠️ ${file} does not parse (${err.message}). Fix the syntax first.`;
     }
-    const run = await runChildDetached(outBin, [...spec.run(outBin), ...(args || [])], path.dirname(r.abs), 30, stdin);
-    try { fs.unlinkSync(outBin); } catch {}
-    return `✅ ran ${file} (exit ${run.code}):\n${(run.out || '').trim().slice(0, MAX_READ) || '(no output)'}`;
+    if (isJsx) return `⚠️ ${file} is JSX — ast_edit handles plain JS/TS. Use edit_file.`;
+
+    // Collect identifier nodes matching the name. Only Identifier nodes are
+    // renamed — strings, comments, and property keys that happen to match stay.
+    const hits = [];
+    walk(ast, (node) => {
+      if (node.type === 'Identifier' && node.name === find) {
+        // Do not rename a property key ({ find: 1 }) — that is a string, not a
+        // reference. Member-expression properties (a.find) likewise.
+        hits.push(node);
+      }
+    });
+    if (!hits.length) return `⚠️ "${find}" does not appear as an identifier in ${file}`;
+
+    // Apply right-to-left so earlier offsets stay valid.
+    let out = src;
+    for (let i = hits.length - 1; i >= 0; i--) {
+      const n = hits[i];
+      out = out.slice(0, n.start) + rename_to + out.slice(n.end);
+    }
+    // Re-parse to prove the edit did not break the file.
+    try { parse(out, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true }); }
+    catch (err) { return `⚠️ rename produced invalid syntax — aborted, file untouched: ${err.message}`; }
+
+    write(r.abs, out);
+    return `✅ renamed "${find}" → "${rename_to}" — ${hits.length} identifier node(s), AST-verified in ${file}`;
   },
 };
+
+/**
+ * Minimal AST walker — acorn does not ship a traverser, and we only need
+ * every node in document order.
+ */
+function walk(node, visit, seen = new Set()) {
+  if (!node || typeof node.type !== 'string' || seen.has(node)) return;
+  seen.add(node);
+  visit(node);
+  for (const key of Object.keys(node)) {
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const c of v) if (c && typeof c.type === 'string') walk(c, visit, seen);
+    } else if (v && typeof v.type === 'string') {
+      walk(v, visit, seen);
+    }
+  }
+}
 
 // ---------------------------------------------------------------- send_document
 
@@ -435,6 +328,108 @@ export const sendDocumentTool = {
     }
     await ctx.sendDocument(r.abs, caption || '');
     return `✅ sent ${rel}`;
+  },
+};
+
+// ---------------------------------------------------------------- run_tests
+
+const runTestsSchema = z.object({
+  path: z.string().optional(),
+  filter: z.string().optional(),
+  timeout_sec: z.number().optional(),
+});
+
+export const runTestsTool = {
+  name: 'run_tests',
+  description: 'Run the project test suite (npm test / pytest / go test / cargo test — auto-detected). Use after a refactor to prove nothing regressed.',
+  isDangerous: true,
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Directory to run in (default: workspace root)' },
+      filter: { type: 'string', description: 'Optional test-name filter' },
+      timeout_sec: { type: 'integer', description: 'Kill after this many seconds (default 120)' },
+    },
+    additionalProperties: false,
+  },
+  schema: runTestsSchema,
+  async execute({ path: rel, filter, timeout_sec }, ctx = {}) {
+    const root = path.resolve(config.agent.workspace, String(ctx.userId ?? ctx.chatId));
+    const cwd = rel ? path.resolve(root, rel) : root;
+    if (!cwd.startsWith(root + path.sep) && cwd !== root) return '⚠️ outside the workspace';
+
+    // Detect the runner the same way a developer would.
+    const has = (f) => fs.existsSync(path.join(cwd, f));
+    let bin, args;
+    if (has('package.json')) { bin = 'npm'; args = ['test']; if (filter) args.push('--', '-t', filter); }
+    else if (has('pytest.ini') || has('setup.py') || has('pyproject.toml')) { bin = 'python3'; args = ['-m', 'pytest', '-q']; if (filter) args.push(filter); }
+    else if (has('go.mod')) { bin = 'go'; args = ['test']; if (filter) args.push('-run', filter); }
+    else if (has('Cargo.toml')) { bin = 'cargo'; args = ['test']; if (filter) args.push(filter); }
+    else return 'No test setup detected (no package.json with a test script, pytest.ini, go.mod, or Cargo.toml).';
+
+    const res = await runChildDetached(bin, args, cwd, timeout_sec ?? 120);
+    const out = (res.out || '').trim();
+    return `exit=${res.code}
+${out.slice(0, 6000)}`;
+  },
+};
+
+// ---------------------------------------------------------------- compile_run
+
+const compileRunSchema = z.object({
+  file: z.string().min(1),
+  stdin: z.string().optional(),
+  timeout_sec: z.number().optional(),
+});
+
+export const compileRunTool = {
+  name: 'compile_run',
+  description: 'Compile a single C/C++/Java/Rust/Go file and run it, returning stdout+stderr. For JS/TS/Python it just runs. Use to check one snippet quickly.',
+  isDangerous: true,
+  parameters: {
+    type: 'object',
+    properties: {
+      file: { type: 'string', description: 'Path relative to the workspace' },
+      stdin: { type: 'string', description: 'Optional standard input' },
+      timeout_sec: { type: 'integer', description: 'Kill after this many seconds (default 30)' },
+    },
+    required: ['file'],
+    additionalProperties: false,
+  },
+  schema: compileRunSchema,
+  async execute({ file, stdin, timeout_sec }, ctx = {}) {
+    const r = resolveInWorkspace(ctx.userId ?? ctx.chatId, file);
+    if (!r.ok) return `⚠️ ${r.reason}`;
+    if (!fs.existsSync(r.abs)) return `⚠️ no such file: ${file}`;
+    const cwd = path.dirname(r.abs);
+    const ext = path.extname(r.abs).toLowerCase();
+
+    const runners = {
+      '.c': [['gcc', ['-O0', '-o', 'a.out', r.abs, '-lm'], './a.out']],
+      '.cpp': [['g++', ['-O0', '-o', 'a.out', r.abs, '-lm'], './a.out']],
+      '.cc': [['g++', ['-O0', '-o', 'a.out', r.abs, '-lm'], './a.out']],
+      '.rs': [['rustc', ['-O', '-o', 'a.out', r.abs], './a.out']],
+      '.java': [['javac', [r.abs], 'java', [path.basename(r.abs, '.java')]]],
+      '.go': [['go', ['run', r.abs], null]],
+      '.js': [[null, [], 'node', [r.abs]]],
+      '.mjs': [[null, [], 'node', [r.abs]]],
+      '.py': [[null, [], 'python3', [r.abs]]],
+      '.sh': [[null, [], 'bash', [r.abs]]],
+    };
+    const plan = runners[ext];
+    if (!plan) return `⚠️ unsupported extension for compile_run: ${ext}`;
+    const [compile, runArgs] = plan;
+
+    // Some toolchains need a binary built first.
+    if (compile && compile[0]) {
+      const cr = await runChildDetached(compile[0], compile[1], cwd, 60);
+      if (cr.code !== 0) return `⚠️ compile failed (exit ${cr.code}):
+${(cr.out || '').trim().slice(0, 3000)}`;
+    }
+    const [rb, ra] = runArgs ? [runArgs[0], runArgs[1]] : plan[1];
+    const res = await runChildDetached(rb, ra, cwd, timeout_sec ?? 30, stdin);
+    return `exit=${res.code}
+${(res.out || '').trim().slice(0, 6000)}`;
   },
 };
 

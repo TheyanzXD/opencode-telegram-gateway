@@ -242,3 +242,43 @@ becomes part of the agent's context.
 - code and text (`.js .py .md .json .yaml .txt …`) — saved as-is.
 - over 8 MB — refused with a reason: the limit is the context window, not disk.
 - anything else — refused with a suggestion, never silently ignored.
+
+## Code intelligence: RAG, AST, dependency graph
+
+The spec asks for code understanding beyond reading files. These tools answer
+questions about the workspace without dragging whole files into context.
+
+- **`semantic_code_search`** — find code by meaning (`"where do we handle
+  retry"`) instead of exact text. Indexes the workspace once with
+  `code_index` and reuses the index; only changed chunks are re-embedded.
+- **`code_symbols`** — the function/class/export map of a file with line
+  numbers, via a real `acorn` AST parse.
+- **`dependency_graph`** — what a file imports, and who imports it. Answers
+  "if I edit this, what breaks". Resolves relative imports to real files.
+- **`dead_code_scan`** — exported names never imported and never referenced
+  outside their own file. Heuristic; the tool says so, and says to verify
+  before deleting.
+- **`image_generate`** — calls the provider's `/images/generations` when one
+  is configured (`IMAGE_PROVIDER`/`IMAGE_MODEL`, or an `image_model` entry in
+  `providers.yaml`). When none is configured it says so plainly instead of
+  producing a placeholder.
+
+### The honest degradation
+
+`sqlite-vec` is not always installable — a phone VPS has no build toolchain.
+The embedding layer tries to load it and falls back to pure-JS cosine over
+stored vectors, same API. When no embedding model is configured either, it
+hashes to a deterministic random projection: the surface works end-to-end but
+retrieval is keyword-adjacent, and `code_index` reports
+`embeddingModel: none (hash fallback — keyword-adjacent only)` rather than
+letting a bad search pass as semantic. Set `EMBEDDING_PROVIDER` and
+`EMBEDDING_MODEL` to make it real.
+
+### ast_edit is now a real AST tool
+
+It used to claim AST while doing a scope-aware text rename. It now parses with
+`acorn`, renames only `Identifier` nodes, applies right-to-left so offsets stay
+valid, and re-parses the result to prove the edit did not break the file. A
+name inside a comment or string literal stays untouched — that is the point.
+JSX/TSX is refused with a pointer to `edit_file` (acorn cannot parse it
+without the JSX plugin).

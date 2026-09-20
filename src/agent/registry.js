@@ -17,6 +17,8 @@ import { sysinfoTool } from './tools/sysinfo.js';
 import { parityTools } from './tools/opencode-parity.js';
 import { askUserTool } from './tools/ask-user.js';
 import { liveShareTools } from './tools/live-share.js';
+import { codeIntelTools } from './tools/code-intel.js';
+import { mediaTools } from './tools/media.js';
 
 export class ToolRegistry {
   constructor(tools = []) {
@@ -86,5 +88,6 @@ export function createDefaultRegistry() {
     ...browserAdvancedTools, ...execTools, ...fileTools, ...memoryTools,
     ...subagentTools, ...observabilityTools, sysinfoTool,
     ...parityTools, askUserTool, ...liveShareTools,
+    ...codeIntelTools, ...mediaTools,
   ]);
 }

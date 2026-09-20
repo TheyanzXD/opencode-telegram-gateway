@@ -42,6 +42,8 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 🔐 **RBAC** — three tiers: chat access (`TELEGRAM_ALLOWED_USERS`), tool access (`TELEGRAM_TOOL_USERS`), operators (`TELEGRAM_ADMIN_USERS`). Dangerous tools need a one-tap approval unless the user is trusted.
 - ↩️ **`/undo`** — every mutating tool snapshots first; one command restores the last change in this user's workspace. Overwritten files go back, created files are removed.
 - 📎 **Document ingestion** — drop a `.zip` or a code file into the chat and it lands in the workspace. Zip-slip entries are refused before extraction; over-8 MB is refused with a reason.
+- 🔎 **Code intelligence** — `semantic_code_search` (RAG over the workspace), `code_symbols` (real AST), `dependency_graph` (blast radius of a change), `dead_code_scan`. `sqlite-vec` when installable, pure-JS cosine when not, and the index says which.
+- 🎨 **Image generation** — `image_generate` when a provider offers it; says plainly when none does. — drop a `.zip` or a code file into the chat and it lands in the workspace. Zip-slip entries are refused before extraction; over-8 MB is refused with a reason.
 - 🔍 **Observability** — `trace_export` a full turn trace, `cost_report` the spend breakdown. Per-user workspace isolation for every tool that touches disk.
 
 See [docs/features.md](docs/features.md) for the full reference.

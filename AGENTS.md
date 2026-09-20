@@ -162,6 +162,29 @@ The closest thing to host mutation from chat, outside `/agent`, is `/model add`
 (writes `providers.yaml`) and `/admin broadcast`. Both are admin-gated and both
 touch only project files.
 
+## Code intelligence and media
+
+`code-intel.js` + `embeddings.js` are the code-understanding layer. They are
+read-only and safe to run without approval.
+
+- `code_index` — chunk and embed the workspace. Idempotent (hash-skips
+  unchanged chunks). Call once before the first semantic search.
+- `semantic_code_search` — meaning-based retrieval over indexed chunks.
+- `code_symbols` — AST symbol map of one file (acorn).
+- `dependency_graph` — imports + reverse imports; the blast radius of a change.
+- `dead_code_scan` — exports nobody imports and nobody references.
+- `image_generate` — provider images endpoint, or an honest refusal.
+
+**The degradation is explicit, not silent.** `sqlite-vec` is optional — pure-JS
+cosine is the fallback. Without `EMBEDDING_PROVIDER`, embedding falls back to a
+deterministic hash projection: retrieval is keyword-adjacent, and `code_index`
+returns `embeddingModel: none (hash fallback)` so nobody mistakes it for
+semantic. Do not present hash-fallback results as semantic search.
+
+`acorn` is a hard dependency (`ast_edit`, `code_symbols`). `ast_edit` now parses
+for real — Identifier nodes only, right-to-left application, re-parse to verify.
+JSX/TSX is refused, not silently mis-edited.
+
 ## RBAC, undo, and documents
 
 **RBAC** (`src/agent/rbac.js`) is three tiers, and the tier decides what the

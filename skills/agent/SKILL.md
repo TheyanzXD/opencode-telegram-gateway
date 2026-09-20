@@ -5,7 +5,7 @@ when: agent|tools|tool list|what can you do
 version: 1.0
 ---
 
-The agent has 60 tools. Grouped by what they do; read-only ones do not need
+The agent has 66 tools. Grouped by what they do; read-only ones do not need
 approval, mutating ones do.
 
 **Shell & execution**
@@ -60,7 +60,13 @@ approval, mutating ones do.
 **Talking to the human**
 - `ask_user` — stop and wait for an answer. Choice buttons or a typed reply.
   Use it instead of guessing when the decision is theirs
-- `todowrite` / `todoread` — the session task list, visible as /todo
+- `code_index` then `semantic_code_search` — find code by meaning instead of
+  grepping blind. Index once, reuse. Prefer this over reading three files whole
+  when you only need the one function.
+- `code_symbols` — the map of what is in a file, before you read it.
+- `dependency_graph` — what breaks if you edit this file. Check before a
+  refactor, not after.
+- `dead_code_scan` — candidates for removal; always verify before deleting. — the session task list, visible as /todo
 - the user can drop a `.zip` or code file into the chat; it lands in the
   workspace as real files, so tell them to do that instead of pasting a wall of
   code. `/undo` restores the last change you made in their workspace — offer it
