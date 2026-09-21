@@ -124,6 +124,9 @@ export function createBot() {
   bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery?.data || '';
     if (data.startsWith('answer:')) return answerCallback(ctx);
+    // Tool-approval keyboards: both /agent runs and plain-chat tool calls park
+    // a deferred promise on approvals.js; tapping ✅/❌ resolves it.
+    if (data.startsWith('approve:') || data.startsWith('deny:')) return approvalCallback(ctx);
     return true;
   });
 

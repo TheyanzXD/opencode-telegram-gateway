@@ -1,6 +1,6 @@
 providers:
   - name: codeforlife
-    base_url: https://api.codeforlife.dev/v1
+    base_url: https://codeforlife.my.id/v1
     auth_mode: header
     key_env: CFL
     models:

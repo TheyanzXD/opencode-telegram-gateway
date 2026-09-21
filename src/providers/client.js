@@ -56,8 +56,10 @@ async function requestJson(providerName, endpoint, body, signal, chatId) {
   const { dispatcher, proxyId } = dispatcherForRequest(chatId);
   const res = await tracked(finalUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...auth.headers },
-    body: JSON.stringify(auth.body),
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...auth.headers },
+    // default_stream === true makes the server stream; a plain JSON round-trip
+    // for tool turns must say so explicitly, or .text() hangs on an open SSE.
+    body: JSON.stringify({ stream: false, ...auth.body }),
     signal,
     dispatcher,
   }, proxyId);

@@ -271,6 +271,25 @@ node -e "const db=require('better-sqlite3')('./data/gateway.db'); console.log(db
 
 See `docs/` for the deep dives.
 
+## Tools in plain chat (not just /agent)
+
+Plain messages are no longer a stateless chatbot. The message handler routes
+through `src/agent/chat-tools.js`, which runs the same tool-calling loop the
+agent engine does, then streams the final answer. Consequences:
+
+- The model gets the architecture brief + a tool notice as system messages, so
+  it knows it sits on a real host and can act. It no longer answers "cannot
+  access files" when it plainly can.
+- Tool calls in a plain message hit the same gates as /agent: approval
+  keyboards for state-changing tools, RBAC tiers, yolo, estop.
+- Each turn is one non-streaming probe (to read tool_calls), then the final
+  no-tool turn is streamed. That costs one extra request per message that ends
+  without a tool call — the price of a live stream inside a tool loop.
+- `src/providers/client.js#requestJson` now forces `stream: false` + an
+  `Accept: application/json` header. Without it the souped-up providers (e.g.
+  codeforlife) treat a tool turn as a streaming SSE request and the non-stream
+  path hangs on the open stream.
+
 ## Feature surface (post-expansion)
 
 The bot grew past relay + agent. This is the map so you do not grep for it.

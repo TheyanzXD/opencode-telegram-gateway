@@ -13,6 +13,9 @@ import {
 import { logger } from '../../logger.js';
 import { splitLong, toTelegramMarkdown } from '../../format.js';
 import { answerByText } from '../../agent/tools/ask-user.js';
+import { architectureBrief } from '../../agent/awareness.js';
+import { chatWithTools } from '../../agent/chat-tools.js';
+import { createDefaultRegistry } from '../../agent/registry.js';
 
 const PLACEHOLDER = '…';
 
@@ -99,6 +102,22 @@ async function handlePrompt(ctx, userText, media) {
     runtimeContext: runtimeContext({ sessionName: sessionId, workspace: process.cwd() }),
   });
 
+  // Tools are on in plain chat, not just /agent. The model must know it sits
+  // on a real host with a tool loop, or it answers "I cannot access files" —
+  // which is wrong here. The brief teaches it; the notice tells it when to
+  // reach for a tool vs. answer straight.
+  const brief = {
+    role: 'system',
+    content: architectureBrief({ workspace: process.cwd(), chatId: ctx.chat?.id }),
+  };
+  const notice = {
+    role: 'system',
+    content: 'You have tool-calling enabled in this conversation and may use tools to act on this host: read and edit files, run commands and scripts, search the web or browse. When a task benefits from a tool, call it and report the real result — do not claim you cannot act. Only tools that change state ask for approval.',
+  };
+  // Below soul/skills/memory, above the last user message.
+  messages.push({ role: 'system', content: brief.content });
+  messages.push({ role: 'system', content: notice.content });
+
   // Skills + memory are injected BELOW the cached prefix, as their own system
   // messages. Changing them does not invalidate the prompt cache.
   const skills = selectSkills(userText);
@@ -141,13 +160,25 @@ async function handlePrompt(ctx, userText, media) {
   } else {
     await ctx.api.sendChatAction(ctx.chat.id, 'typing');
     try {
-      const { content, usage } = await chatCompletion({
-        provider, model, messages, chatId,
+      const { content } = await chatWithTools({
+        provider, model, messages, chatId, userId: user.user_id,
         temperature: user.temperature ?? config.defaults.temperature,
         maxTokens: config.defaults.maxTokens,
+        onApproval: (id, tool, args) => {
+          ctx.api.sendMessage(ctx.chat.id,
+            `🔐 *Approval required*\n\nTool: \`${tool}\`\n\`\`\`\n${JSON.stringify(args, null, 2).slice(0, 1200)}\n\`\`\``,
+            { parse_mode: 'Markdown',
+              reply_markup: { inline_keyboard: [[
+                { text: '✅ Izinkan', callback_data: `approve:${id}` },
+                { text: '❌ Tolak', callback_data: `deny:${id}` },
+              ]] } }).catch(() => {});
+        },
+        sendToolStatus: async (tool, args, output) => {
+          await ctx.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
+        },
       });
-      persistTurn(user.user_id, userText, content, usage, sessionId);
-      recordUsage({ user_id: user.user_id, provider, model, usage });
+      persistTurn(user.user_id, userText, content, null, sessionId);
+      recordUsage({ user_id: user.user_id, provider, model, usage: null });
       rememberAnswer(chatId, ctx.message?.message_id, userText, media);
       await sendReply(ctx, toTelegramMarkdown(content) || '(empty)', undefined, regenKeyboard(ctx.message?.message_id));
     } catch (err) {
@@ -158,7 +189,6 @@ async function handlePrompt(ctx, userText, media) {
 }
 
 async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal }) {
-  const { withEmptyResponseGuard } = await import('../../agent/guards.js');
   let buf = '';
   let lastEdit = 0;
   const flush = async (text) => {
@@ -169,32 +199,35 @@ async function streamReply(ctx, replyMsg, { provider, model, messages, user, cha
       { parse_mode: 'Markdown' },
     ).catch(() => {});
   };
+  const onApproval = (id, tool, args) => {
+    ctx.api.sendMessage(ctx.chat.id,
+      `🔐 *Approval required*\n\nTool: \`${tool}\`\n\`\`\`\n${JSON.stringify(args, null, 2).slice(0, 1200)}\n\`\`\``,
+      { parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[
+          { text: '✅ Izinkan', callback_data: `approve:${id}` },
+          { text: '❌ Tolak', callback_data: `deny:${id}` },
+        ]] } }).catch(() => {});
+  };
   try {
-    await withEmptyResponseGuard({
-      signal: signal || null,
-      openStream: () => streamChatCompletion({
-        provider, model, messages, chatId,
-        temperature: user.temperature ?? config.defaults.temperature,
-        maxTokens: config.defaults.maxTokens,
-      }),
-      onChunk: (acc) => {
+    const { content } = await chatWithTools({
+      provider, model, messages, chatId, userId: user.user_id,
+      temperature: user.temperature ?? config.defaults.temperature,
+      maxTokens: config.defaults.maxTokens,
+      onApproval,
+      onStreamChunk: (acc) => {
         buf = acc;
         const now = Date.now();
         if (now - lastEdit > 700 || buf.length > 3800) {
           lastEdit = now;
-          ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, buf.slice(0, 4000) || PLACEHOLDER).catch(() => {});
+          ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, toTelegramMarkdown(acc).slice(0, 4000) || PLACEHOLDER).catch(() => {});
         }
       },
-      onDone: async (final) => {
-        persistTurn(user.user_id, messages[messages.length - 1].content, final, null, sessionId);
-        recordUsage({ user_id: user.user_id, provider, model, usage: null });
-        await flush(final);
-      },
-      onFail: async (message) => {
-        logger.error({ message }, 'empty response guard failed');
-        await ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, `⚠️ ${message}`.slice(0, 4000)).catch(() => {});
-      },
+      stream: (args) => streamChatCompletion(args),
     });
+    if (buf) await flush(buf);
+    else await flush(content || '(no response)');
+    persistTurn(user.user_id, messages[messages.length - 1].content, content, null, sessionId);
+    recordUsage({ user_id: user.user_id, provider, model, usage: null });
   } catch (err) {
     if (err?.name === 'AbortError' || signal?.aborted) {
       await flush(buf || '(stopped)');
