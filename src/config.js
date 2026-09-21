@@ -110,7 +110,9 @@ export const config = {
     dir: process.env.PLUGINS_DIR || path.join(ROOT, 'plugins'),
   },
   proxy: {
-    enabled: bool(process.env.PROXY_ENABLED, true),
+    // Off by default: the pool is opt-in. Cloning and running the bot must
+    // not start fetching ten thousand open proxies.
+    enabled: bool(process.env.PROXY_ENABLED, false),
     target: int(process.env.PROXY_TARGET, 10_000),
     rotatePerChat: bool(process.env.PROXY_PER_CHAT, true),
     refreshHours: int(process.env.PROXY_REFRESH_HOURS, 6),

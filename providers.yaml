@@ -1,4 +1,12 @@
 providers:
+  - name: codeforlife
+    base_url: https://api.codeforlife.dev/v1
+    auth_mode: header
+    key_env: CFL
+    models:
+      mer/mercury-2.5:
+        context: 64000
+        vision: false
   - name: openai
     base_url: https://api.openai.com/v1
     auth_mode: header

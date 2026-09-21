@@ -35,7 +35,7 @@ import { loadSubscribers, emit } from './features/webhooks.js';
 import { pinnedBlock } from './features/pinned.js';
 import { loadMcpServers, allMcpTools } from '../mcp/client.js';
 import { setKey, getKey, clearKey, resolvedKeyFor } from '../providers/keys.js';
-import { pluginsLoader } from '../plugins/state.js';
+import { pluginsLoader, setPluginsLoader } from '../plugins/state.js';
 import { leaseMiddleware } from '../agent/turn-lease.js';
 import { onText, onPhoto } from './handlers/message.js';
 import { onDocument } from './handlers/document.js';

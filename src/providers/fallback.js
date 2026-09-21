@@ -7,6 +7,7 @@
 
 import { chatCompletion, streamChatCompletion } from './client.js';
 import { config } from '../config.js';
+import { providerNames } from './store.js';
 import { logger } from '../logger.js';
 
 /**
@@ -115,7 +116,7 @@ export function degradationReport() {
   const out = [];
   const ok = (name, cond, reason) => out.push({ name, available: !!cond, reason: cond ? null : reason });
 
-  ok('chat', config.providers?.length, 'no providers configured');
+  ok('chat', providerNames().length, 'no providers configured');
   ok('vision', !!(config.vision?.provider && config.vision?.model), 'VISION_PROVIDER/MODEL not set — photo messages will be refused');
   ok('streaming', config.streaming !== false, 'STREAMING=false — replies arrive all at once');
   ok('proxy', config.proxy?.enabled, 'PROXY_* unset — requests go direct');
