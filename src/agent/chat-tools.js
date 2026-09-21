@@ -31,6 +31,47 @@ const MAX_TURN_CHARS = 6000;
  * lines in the message being streamed. Approvals are rendered by the caller
  * via `onApproval(id, tool, args)` when present, else auto-approve (yolo).
  */
+
+/**
+ * Parse a provider's textual tool-call syntax into {name, arguments} pairs.
+ * Reasoning models like mercury/mercury-2.5 don't always fill the native
+ * `tool_calls` field — they emit:
+ *   <|tool_call_start|>
+ *   <function=execute_bash>
+ *   <parameter=command>
+ *   ls -la
+ *   </parameter>
+ *   </function>
+ *   <|tool_call_end|>
+ * inside the message content. We detect that and run it like a native call,
+ * rather than letting the raw markup leak to the user.
+ */
+function parseTextualToolCalls(content) {
+  if (!content || !content.includes('<|tool_call_start|>')) return null;
+  const out = [];
+  const blockRe = /<\|tool_call_start\|>([\s\S]*?)<\|tool_call_end\|>/g;
+  let m;
+  while ((m = blockRe.exec(content)) !== null) {
+    const block = m[1];
+    const fn = /<function=([\w-]+)>/.exec(block);
+    if (!fn) continue;
+    const name = fn[1].trim();
+    const args = {};
+    const paramRe = /<parameter=([\w-]+)>\n([\s\S]*?)\n<\/parameter>/g;
+    let pm;
+    while ((pm = paramRe.exec(block)) !== null) {
+      args[pm[1].trim()] = pm[2];
+    }
+    // single unnamed parameter fallback: <parameter=command> X </parameter>
+    if (!Object.keys(args).length) {
+      const un = /<parameter=([\w-]+)>\s*([\s\S]*?)\s*<\/parameter>/.exec(block);
+      if (un) args[un[1].trim()] = un[2];
+    }
+    out.push({ callId: `text_${out.length}`, name, arguments: JSON.stringify(args) });
+  }
+  return out.length ? out : null;
+}
+
 export async function chatWithTools({
   provider, model, messages, chatId, userId,
   temperature, maxTokens, maxTurns = 20,
@@ -64,10 +105,23 @@ export async function chatWithTools({
     const data = await requestJson(provider, '/chat/completions', body(), null, chatId);
     const msg = data.choices?.[0]?.message || {};
     const content = msg.content || '';
-    const toolCalls = msg.tool_calls || [];
+    let toolCalls = msg.tool_calls || [];
 
-    if (toolCalls.length) convo.push({ role: 'assistant', content, tool_calls: toolCalls });
-    else {
+    // Reasoning models (mercury) may emit tool calls as text instead of the
+    // native field. Parse them so the markup does not leak to the user.
+    if (!toolCalls.length) {
+      const textCalls = parseTextualToolCalls(content);
+      if (textCalls) toolCalls = textCalls;
+    }
+
+    if (toolCalls.length) {
+      // echo the assistant turn verbatim — for native calls carry tool_calls;
+      // for textual ones the content already holds the call markup, so the
+      // next turn must not re-read it as user-visible text.
+      convo.push(toolCalls[0].callId?.startsWith?.('text_')
+        ? { role: 'assistant', content: '' }
+        : { role: 'assistant', content, tool_calls: toolCalls });
+    } else {
       convo.push({ role: 'assistant', content });
       if (stream) {
         // Stream the final turn.
