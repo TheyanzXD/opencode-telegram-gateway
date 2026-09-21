@@ -15,6 +15,7 @@ import { splitLong, toTelegramMarkdown } from '../../format.js';
 import { answerByText } from '../../agent/tools/ask-user.js';
 import { architectureBrief } from '../../agent/awareness.js';
 import { chatWithTools } from '../../agent/chat-tools.js';
+import { TelegramPresenter } from '../../agent/presenter.js';
 import { createDefaultRegistry } from '../../agent/registry.js';
 
 const PLACEHOLDER = '…';
@@ -152,45 +153,44 @@ async function handlePrompt(ctx, userText, media) {
   }
 
   if (config.streaming) {
-    const replyMsg = await ctx.reply(PLACEHOLDER, { reply_markup: stopKeyboard() });
+    const presenter = new TelegramPresenter({ bot: ctx.api, chatId: ctx.chat.id, debounceMs: 700 });
+    const sent = await presenter.init('🧠 thinking…');
     const ac = abortControllerFor(chatId);
-    rememberAnswer(chatId, replyMsg.message_id, userText, media);
-    return streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal: ac.signal })
+    rememberAnswer(chatId, sent, userText, media);
+    return streamReply(ctx, { message_id: sent }, { provider, model, messages, user, chatId, sessionId, signal: ac.signal, presenter })
       .finally(() => releaseAbortController(chatId));
   } else {
-    await ctx.api.sendChatAction(ctx.chat.id, 'typing');
+    // Non-streaming still shows live tool progress through a presenter.
+    const presenter = new TelegramPresenter({ bot: ctx.api, chatId: ctx.chat.id, debounceMs: 700 });
+    const sent = await presenter.init('🧠 thinking…').catch(() => null);
     try {
       const { content } = await chatWithTools({
         provider, model, messages, chatId, userId: user.user_id,
         temperature: user.temperature ?? config.defaults.temperature,
         maxTokens: config.defaults.maxTokens,
-        onApproval: (id, tool, args) => {
-          ctx.api.sendMessage(ctx.chat.id,
-            `🔐 *Approval required*\n\nTool: \`${tool}\`\n\`\`\`\n${JSON.stringify(args, null, 2).slice(0, 1200)}\n\`\`\``,
-            { parse_mode: 'Markdown',
-              reply_markup: { inline_keyboard: [[
-                { text: '✅ Izinkan', callback_data: `approve:${id}` },
-                { text: '❌ Tolak', callback_data: `deny:${id}` },
-              ]] } }).catch(() => {});
-        },
-        sendToolStatus: async (tool, args, output) => {
-          await ctx.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
-        },
+        onApproval: (id, tool, args) => presenter.sendApproval(id, tool, args),
+        onEvent: (evt) => presenter.push(evt),
       });
+      presenter.done = true;
+      presenter.push({ type: 'token', text: content });
+      await presenter.finalize().catch(() => {});
       persistTurn(user.user_id, userText, content, null, sessionId);
       recordUsage({ user_id: user.user_id, provider, model, usage: null });
       rememberAnswer(chatId, ctx.message?.message_id, userText, media);
-      await sendReply(ctx, toTelegramMarkdown(content) || '(empty)', undefined, regenKeyboard(ctx.message?.message_id));
     } catch (err) {
+      presenter.push({ type: 'error', message: err.message });
+      presenter.done = true;
+      await presenter.finalize().catch(() => {});
       logger.error({ err: err.message }, 'chat error');
       await ctx.reply(`❌ ${err.message}`);
     }
   }
 }
 
-async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal }) {
+async function streamReply(ctx, replyMsg, { provider, model, messages, user, chatId, sessionId, signal, presenter }) {
+  // Approvals render through the presenter (its own inline keyboard), so the
+  // tap flows through the same approve:/deny: handler as /agent.
   let buf = '';
-  let lastEdit = 0;
   const flush = async (text) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
@@ -199,36 +199,26 @@ async function streamReply(ctx, replyMsg, { provider, model, messages, user, cha
       { parse_mode: 'Markdown' },
     ).catch(() => {});
   };
-  const onApproval = (id, tool, args) => {
-    ctx.api.sendMessage(ctx.chat.id,
-      `🔐 *Approval required*\n\nTool: \`${tool}\`\n\`\`\`\n${JSON.stringify(args, null, 2).slice(0, 1200)}\n\`\`\``,
-      { parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [[
-          { text: '✅ Izinkan', callback_data: `approve:${id}` },
-          { text: '❌ Tolak', callback_data: `deny:${id}` },
-        ]] } }).catch(() => {});
-  };
   try {
     const { content } = await chatWithTools({
       provider, model, messages, chatId, userId: user.user_id,
       temperature: user.temperature ?? config.defaults.temperature,
       maxTokens: config.defaults.maxTokens,
-      onApproval,
-      onStreamChunk: (acc) => {
-        buf = acc;
-        const now = Date.now();
-        if (now - lastEdit > 700 || buf.length > 3800) {
-          lastEdit = now;
-          ctx.api.editMessageText(ctx.chat.id, replyMsg.message_id, toTelegramMarkdown(acc).slice(0, 4000) || PLACEHOLDER).catch(() => {});
-        }
-      },
+      onApproval: (id, tool, args) => presenter.sendApproval(id, tool, args),
+      onEvent: (evt) => presenter.push(evt),
       stream: (args) => streamChatCompletion(args),
     });
-    if (buf) await flush(buf);
-    else await flush(content || '(no response)');
+    presenter.done = true;
+    presenter.push({ type: 'token', text: content });
+    await presenter.finalize();
+    buf = content;
+    await flush(content || '(no response)');
     persistTurn(user.user_id, messages[messages.length - 1].content, content, null, sessionId);
     recordUsage({ user_id: user.user_id, provider, model, usage: null });
   } catch (err) {
+    presenter.push({ type: 'error', message: err.message });
+    presenter.done = true;
+    await presenter.finalize().catch(() => {});
     if (err?.name === 'AbortError' || signal?.aborted) {
       await flush(buf || '(stopped)');
       return;

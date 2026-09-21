@@ -82,7 +82,11 @@ export async function chatWithTools({
                        // (non-tool) turn is streamed through this instead of the
                        // non-streaming request. Tool turns stay non-streaming.
   onStreamChunk = null,
+  onEvent = null,      // Hermes-style structured events: {type} where type ∈
+                       // commentary | toolStart | toolEnd | token | done | error.
+                       // Lets a presenter show live progress, not just a cursor.
 }) {
+  const emit = (type, payload = {}) => { try { onEvent?.({ type, ...payload }); } catch {} };
   if (!getProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
 
   let convo = messages.slice();
@@ -96,6 +100,11 @@ export async function chatWithTools({
   });
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    if (turn > 0) {
+      // between tool rounds — the Hermes `Commentary` event: the agent moves
+      // from one action to the next and the user should see the shift
+      emit('commentary', { text: `…` });
+    }
     // Tool turns must read the full message to find tool_calls, so they are
     // always non-streaming here. When the caller wants a visible stream, we
     // do a single non-streaming probe turn; if it turns out to be the final
@@ -133,8 +142,10 @@ export async function chatWithTools({
           acc += chunk;
           onStreamChunk?.(acc);
         }
+        emit('done', { content: acc || content });
         return { content: acc || content, convo };
       }
+      emit('done', { content });
       return { content, convo };
     }
 
@@ -179,13 +190,17 @@ export async function chatWithTools({
       }
 
       const t0 = Date.now();
+      emit('toolStart', { tool: name, args });
       const result = await registry.execute(name, args, { chatId, userId });
       const output = String(result.content).slice(0, MAX_TURN_CHARS);
-      logger.debug({ tool: name, ms: Date.now() - t0, isError: result.isError }, 'chat tool ran');
+      const ms = Date.now() - t0;
+      logger.debug({ tool: name, ms, isError: result.isError }, 'chat tool ran');
+      emit('toolEnd', { tool: name, ms, ok: !result.isError, isError: result.isError });
       sendToolStatus?.(name, args, output);
       convo.push({ role: 'tool', tool_call_id: call.id, name, content: output });
     }
     // loop back: let the model see the tool results
   }
+  emit('error', { message: 'reached the tool-turn cap without a final answer' });
   return { content: '⚠️ reached the tool-turn cap without a final answer.', convo };
 }

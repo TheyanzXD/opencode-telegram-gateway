@@ -14,6 +14,7 @@ import {
 import { yoloCommand, estopCommand } from './commands/agent-admin.js';
 import { debugCommand, pluginsCommand } from './commands/debug.js';
 import { usageCommand, quotaCommand } from './commands/usage.js';
+import { memoryCommand } from './commands/memory.js';
 import {
   stopCallback, regenCallback, exportConversation,
   replyContext, rememberAnswer, regenKeyboard, stopKeyboard,
@@ -114,6 +115,7 @@ export function createBot() {
   bot.command('usage', usageCommand);
   bot.command('cost', usageCommand);
   bot.command('quota', quotaCommand);
+  bot.command('memory', memoryCommand);
   bot.command('export', exportConversation);
   bot.command('lang', langCommand);
   bot.command('key', keyCommand);

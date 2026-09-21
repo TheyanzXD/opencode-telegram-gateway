@@ -34,6 +34,7 @@ export async function helpCommand(ctx) {
 /reset — clear history (active session)
 /history — show last messages (active session)
 /sessions — conversation sessions${admin}
+/memory — the durable facts the agent remembers about you (add/list/clear)
 /todo — the agent's task list (what it is doing, what's next)
 
 /agent <task> — tool-calling agent: shell, files, browser, web search

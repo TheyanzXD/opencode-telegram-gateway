@@ -275,7 +275,9 @@ See `docs/` for the deep dives.
 
 Plain messages are no longer a stateless chatbot. The message handler routes
 through `src/agent/chat-tools.js`, which runs the same tool-calling loop the
-agent engine does, then streams the final answer. Consequences:
+agent engine does, then streams the final answer through a `TelegramPresenter`
+(the same live-message buffer `/agent` uses), so the user sees tool progress
+and streamed tokens, not a blank cursor. Consequences:
 
 - The model gets the architecture brief + a tool notice as system messages, so
   it knows it sits on a real host and can act. It no longer answers "cannot

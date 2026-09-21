@@ -52,9 +52,15 @@ export class TelegramPresenter {
         if (this.toolLog.length > TOOL_LOG_CAP) this.toolLog.shift();
         this.dirty = true;
         break;
+      case 'commentary':
+        // interim assistant text between tool rounds (Hermes Commentary)
+        this.toolLog.push(`· ${String(evt.text || '').trim().slice(0, 100)}`);
+        if (this.toolLog.length > TOOL_LOG_CAP) this.toolLog.shift();
+        this.dirty = true;
+        break;
       case 'toolEnd': {
         const last = this.toolLog[this.toolLog.length - 1];
-        const oneLine = String(evt.output).split('\n').filter(Boolean)[0] || '';
+        const oneLine = String(evt.output || evt.content || '').split('\n').filter(Boolean)[0] || '';
         if (last && last.startsWith(`▶ ${evt.tool}`)) {
           this.toolLog[this.toolLog.length - 1] =
             `${evt.denied ? '⛔' : evt.isError ? '⚠️' : '✔'} ${evt.tool} — ${oneLine.slice(0, 120)}`;
