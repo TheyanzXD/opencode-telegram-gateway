@@ -312,4 +312,6 @@ node --test tests/
 MIT.
 
 - Code intelligence: RAG search, AST symbols, dependency graph, dead code, image generation
+- `/gitpull` — one-command self-update + auto-restart
+- `/memory` — durable memory surface
 - oh-my-pi tooling, recoded native: read_pro (files/archives/SQLite/PDF), read_summary, ast_grep structural search, stateful REPL, checkpoint/rewind, context_notes, think, security_scan, GitHub ops, TTS
