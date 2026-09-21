@@ -20,6 +20,12 @@ export class TelegramPresenter {
    * @param {AbortController} [opts.abortCtl]
    */
   constructor({ bot, chatId, debounceMs = 1500, abortCtl }) {
+    // grammY passes `ctx.api`; telegraf passes `bot.telegram`. Normalise both
+    // to a single handle with grammY's sendMessage/editMessageText signatures.
+    // grammY api: sendMessage(chatId, text, other), editMessageText(chatId, mid, text, other)
+    // telegraf  : telegram.sendMessage(chatId, text, other), telegram.editMessageText(chatId, mid, inline, text, other)
+    this.telegramStyle = !!(bot && bot.telegram && typeof bot.telegram.sendMessage === 'function');
+    this.api = this.telegramStyle ? bot.telegram : bot;
     this.bot = bot;
     this.chatId = chatId;
     this.debounceMs = debounceMs;
@@ -35,7 +41,7 @@ export class TelegramPresenter {
 
   /** Send the initial placeholder and remember its id for later edits. */
   async init(initial = '…') {
-    const sent = await this.bot.telegram.sendMessage(this.chatId, initial);
+    const sent = await this.api.sendMessage(this.chatId, initial);
     this.messageId = sent.message_id;
     return this.messageId;
   }
@@ -105,13 +111,13 @@ export class TelegramPresenter {
     this.lastEdit = Date.now();
     const body = this.render();
     try {
-      await this.bot.telegram.editMessageText(
-        this.chatId,
-        this.messageId,
-        undefined,
-        this.done ? toTelegramMarkdown(body) || TRUNC : body,
-        this.done ? { parse_mode: 'Markdown' } : {},
-      );
+      const text = this.done ? toTelegramMarkdown(body) || TRUNC : body;
+      const opts = this.done ? { parse_mode: 'Markdown' } : {};
+      if (this.telegramStyle) {
+        await this.api.editMessageText(this.chatId, this.messageId, undefined, text, opts);
+      } else {
+        await this.api.editMessageText(this.chatId, this.messageId, text, opts);
+      }
     } catch (err) {
       // "message is not modified" fires when the debounce fires twice with the same body
       if (!/not modified/i.test(err.message)) logger.debug({ err: err.message }, 'edit failed');
@@ -121,7 +127,7 @@ export class TelegramPresenter {
   /** Send the inline keyboard for a pending dangerous tool. */
   async sendApproval(approvalId, tool, args) {
     const preview = JSON.stringify(args, null, 2).slice(0, 1200);
-    return this.bot.telegram.sendMessage(
+    return this.api.sendMessage(
       this.chatId,
       `🔐 *Approval required*\n\nTool: \`${tool}\`\n\`\`\`\n${preview}\n\`\`\``,
       {
@@ -146,7 +152,7 @@ export class TelegramPresenter {
     // text may exceed one message — split and send the overflow as new messages
     const parts = splitLong(toTelegramMarkdown(text) || TRUNC);
     for (let i = 1; i < parts.length; i++) {
-      await this.bot.telegram.sendMessage(this.chatId, parts[i], { parse_mode: 'Markdown' }).catch(() => {});
+      await this.api.sendMessage(this.chatId, parts[i], { parse_mode: 'Markdown' }).catch(() => {});
     }
     if (parts.length > 1) {
       // first part already rendered into the tracked message
