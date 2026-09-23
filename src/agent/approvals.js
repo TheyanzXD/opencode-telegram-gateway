@@ -10,6 +10,7 @@
 // - guardian: a second model judges whether approval is needed at all (see
 //   approval-smart.js). Clearly-safe calls run; risky ones still ask.
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger.js';
 
 /** @type {Map<string, {resolve, reject, createdAt, tool, args, userId}>} */
@@ -23,6 +24,60 @@ const DENIAL_BREAK_THRESHOLD = 3; // after 3 straight denials, stop asking
 
 /** Per-user yolo (auto-approve everything dangerous). */
 const yoloUsers = new Set();
+
+/**
+ * HMAC key for callback-data signing. Derived from the bot token so a fresh
+ * deploy with a new token cannot reuse old approval callbacks, and so two
+ * gateways on one host cannot forge each other's signatures.
+ */
+const HMAC_KEY = process.env.APPROVAL_HMAC_KEY || process.env.TELEGRAM_BOT_TOKEN || 'fallback-do-not-use';
+
+/**
+ * Sign an approval id so a callback cannot be forged. Telegram callback_data is
+ * visible to any user in the chat (and to anyone who forwards the message), so
+ * `approve:<id>` alone lets a third party approve a dangerous tool call by
+ * replaying the payload. The signature binds the id to a secret this process
+ * holds and the chat the keyboard was sent to.
+ *
+ * @param {string} id approval id
+ * @param {number|string} chatId chat the keyboard was rendered in
+ * @returns {string} hex signature, first 16 chars
+ */
+export function signApproval(id, chatId) {
+  return createHmac('sha256', HMAC_KEY)
+    .update(`${id}:${chatId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
+ * Constant-time verification of a callback signature.
+ * @returns {boolean}
+ */
+export function verifyApproval(id, chatId, sig) {
+  if (!sig || typeof sig !== 'string') return false;
+  const want = signApproval(id, chatId);
+  if (want.length !== sig.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(want, 'utf8'), Buffer.from(sig, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/** Callback payload shape: approve:<id>:<sig> */
+export function packApprovalCallback(id, chatId) {
+  return `approve:${id}:${signApproval(id, chatId)}`;
+}
+
+/** Parse + verify in one call. Returns null when the signature does not match. */
+export function unpackApprovalCallback(payload, chatId) {
+  const parts = String(payload || '').split(':');
+  if (parts.length !== 3) return null;
+  const [, id, sig] = parts;
+  if (!verifyApproval(id, chatId, sig)) return null;
+  return { id };
+}
 
 export class ApprovalRequired extends Error {
   constructor(approvalId, tool, args) {
@@ -112,6 +167,60 @@ export function rejectAllForUser(userId) {
       p.resolve(false);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Dual custody: the most destructive operations need TWO different admins to
+// agree before they run. One admin taps ✅; the second admin gets a fresh
+// keyboard and taps again. Neither admin can approve their own request twice.
+// ---------------------------------------------------------------------------
+
+/**
+ * Tools destructive enough to require two admins. Anything that can take the
+ * service itself down or destroy user data irreversibly lands here.
+ */
+const DUAL_CUSTODY_TOOLS = new Set([
+  'wipe_volume', 'destroy_data', 'deploy_update', 'delete_repo', 'drop_database',
+]);
+
+/** A pending dual-custody request: { firstAdmin, tool, args, resolve, createdAt }. */
+const dualPending = new Map();
+const DUAL_TTL_MS = 10 * 60 * 1000;
+
+export function requiresDualCustody(tool) {
+  return DUAL_CUSTODY_TOOLS.has(tool);
+}
+
+/**
+ * Start (or continue) a dual-custody approval.
+ * @returns {{ id: string, needsSecond: boolean }} needsSecond: true when the
+ *   first admin already approved and a SECOND admin is now required
+ */
+export function dualCustodyGate({ userId, tool, args }) {
+  if (!requiresDualCustody(tool)) return { id: null, needsSecond: false };
+
+  const existing = [...dualPending.values()].find(
+    (p) => p.tool === tool && JSON.stringify(p.args) === JSON.stringify(args),
+  );
+
+  if (!existing) {
+    const id = `dual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    dualPending.set(id, {
+      id, firstAdmin: userId, tool, args,
+      firstApproved: true, createdAt: Date.now(),
+    });
+    setTimeout(() => dualPending.delete(id), DUAL_TTL_MS).unref?.();
+    return { id, needsSecond: true };
+  }
+
+  // A second, different admin: release the gate.
+  if (existing.firstAdmin !== userId) {
+    dualPending.delete(existing.id);
+    return { id: existing.id, needsSecond: false };
+  }
+
+  // The same admin tapping again does not count as a second approval.
+  return { id: existing.id, needsSecond: true };
 }
 
 function expireApproval(id) {

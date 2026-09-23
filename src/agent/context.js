@@ -16,6 +16,7 @@
 
 import { logger } from '../logger.js';
 import { soulMessage } from './personality.js';
+import { TRUST_INSTRUCTION } from './trust.js';
 
 const DEFAULT_MAX_CHARS = 24_000;   // soft budget for visible history, in characters
 const SUMMARY_MARKER = '[summary]';
@@ -135,7 +136,10 @@ export async function buildStableMessages(user, currentTurn, opts = {}) {
   const soul = opts.soul ?? (await soulMessage(user.user_id));
   const base = soul?.content?.trim()?.length >= 8 ? soul.content : systemPrompt;
 
-  const out = [{ role: 'system', content: base }];
+  // The trust boundary: tool output inside <tool_output_untrusted_data> is data,
+  // never instructions. It lives in the base system message so it is cached with
+  // the prefix — stated once, applied to every turn.
+  const out = [{ role: 'system', content: `${base}\n\n${TRUST_INSTRUCTION}` }];
   if (runtime) out.push({ role: 'system', content: runtime });
   out.push(...compressed, { role: 'user', content: currentTurn });
   return out;
