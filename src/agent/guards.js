@@ -1,15 +1,16 @@
 // language: JavaScript (Node 20+ ESM), file: src/agent/guards.js
 // Guards around provider responses. Two failure modes that produce a blank or
-// nonsense reply, both silent in the current code:
+// nonsense reply, both silent before this fix:
 //
 // 1. Empty content — model returned nothing (content filter, refusal, truncation,
 //    or a provider quirk that sends finish_reason without any delta chunk).
-//    Today this surfaces as the literal "(empty)" with no explanation.
 // 2. Truncated stream — the connection closed mid-response and buf holds a
 //    half-finished sentence. Sending that as the answer looks like a bug.
 //
-// The guard classifies the cause and, for the retryable ones, re-asks once with a
-// nudge. Only then does the failure become a visible, actionable message.
+// The guard classifies the cause and, for the retryable ones, re-asks with a
+// NUDGE that actually reaches the provider: openStream(nudge, accumulated).
+// Previously the nudge string was built and then discarded (`void nudge;`),
+// so every retry sent the identical prompt and got the identical truncation.
 
 import { logger } from '../logger.js';
 
@@ -32,11 +33,11 @@ function normalize(stream) {
 }
 
 export const EMPTY_CAUSES = {
-  FILTER: 'filter',       // provider blocked the content
+  FILTER: 'filter',         // provider blocked the content
   MAX_TOKENS: 'max_tokens', // hit the output cap before finishing
-  REFUSAL: 'refusal',     // model declined to answer
-  TRUNCATED: 'truncated', // stream closed mid-response
-  PROVIDER: 'provider',   // provider returned nothing usable
+  REFUSAL: 'refusal',       // model declined to answer
+  TRUNCATED: 'truncated',   // stream closed mid-response
+  PROVIDER: 'provider',     // provider returned nothing usable
 };
 
 const CAUSE_TEXT = {
@@ -91,7 +92,7 @@ export function causeText(cause) {
 }
 
 /**
- * Decide whether an empty/incomplete response is worth one retry.
+ * Decide whether an empty/incomplete response is worth a retry.
  * A filter hit will filter the retry too — no point burning a request.
  */
 export function shouldRetry(cause) {
@@ -102,10 +103,15 @@ export function shouldRetry(cause) {
 
 /**
  * Wrap a stream consumer with the guard. onChunk accumulates; when the stream
- * ends, this decides the outcome: accept, retry once with a nudge, or report.
+ * ends, this decides the outcome: accept, retry with a nudge, or report.
+ *
+ * The nudge contract: openStream is called as openStream(nudge, accumulatedText).
+ * A provider that cannot use the extra argument must at least not break on it —
+ * the second argument is the partial reply so a "continue from here" instruction
+ * can be assembled, and the buffer already received is never thrown away.
  *
  * @param {object} opts
- * @param {() => AsyncIterable<string>} opts.openStream  call to get a fresh stream
+ * @param {(nudge: string|null, accumulated: string) => AsyncIterable<string>} opts.openStream
  * @param {(text: string) => void} opts.onChunk
  * @param {(finalText: string, meta: object) => void} opts.onDone
  * @param {(message: string) => void} opts.onFail
@@ -113,32 +119,35 @@ export function shouldRetry(cause) {
  * @param {AbortSignal} [opts.signal]
  */
 export async function withEmptyResponseGuard({
-  openStream, onChunk, onDone, onFail, maxRetries = 1, signal,
+  openStream, onChunk, onDone, onFail, maxRetries = 2, signal,
 }) {
   onFail = onFail || (() => {});
   let attempt = 0;
+  let accumulatedText = '';
   let finishReason = null;
+  let nextNudge = null;
 
   for (;;) {
     if (signal?.aborted) { onFail('aborted by user'); return; }
 
-    let buf = '';
     finishReason = null;
+    let turnChunk = '';
+
     try {
-      // A provider stream may be an async iterable, a web ReadableStream, or an
-      // array of chunks — normalize before consuming. Without this, a web stream
-      // hits "not iterable" and is misreported as an empty model response.
-      const stream = normalize(await openStream());
+      // The nudge reaches the provider here — accumulated text is carried so a
+      // continuation does not restart from zero and lose what was streamed.
+      const stream = normalize(await openStream(nextNudge, accumulatedText));
       for await (const delta of stream) {
         if (signal?.aborted) { onFail('aborted by user'); return; }
-        if (typeof delta === 'string') {
-          buf += delta;
-          onChunk(buf);
+        if (typeof delta === 'string' && delta.length > 0) {
+          turnChunk += delta;
+          accumulatedText += delta;
+          onChunk(accumulatedText);
         }
       }
     } catch (err) {
       // a stream that died mid-read: keep what we have and evaluate it below
-      if (buf.trim()) {
+      if (accumulatedText.trim()) {
         finishReason = 'length';
       } else {
         onFail(err.message || 'stream error');
@@ -146,29 +155,28 @@ export async function withEmptyResponseGuard({
       }
     }
 
-    const cause = diagnoseEmpty(buf, { finishReason });
+    const cause = diagnoseEmpty(accumulatedText, { finishReason });
 
     if (!cause) {
-      onDone(buf, { finishReason, attempt });
+      onDone(accumulatedText, { finishReason, attempt });
       return;
     }
 
-    logger.warn({ cause, attempt, len: buf.length }, 'empty/incomplete response');
+    logger.warn({ cause, attempt, len: accumulatedText.length }, 'empty/incomplete response');
 
     if (attempt < maxRetries && shouldRetry(cause)) {
       attempt++;
-      // For a truncation at the token cap, more output room is the actual fix.
-      const nudge = cause === EMPTY_CAUSES.MAX_TOKENS
-        ? 'Continue. Do not repeat what you already wrote, just finish the answer.'
+      // For a truncation at the token cap, "continue from where you stopped" is
+      // the instruction that actually unblocks it; a full re-ask re-burns the
+      // same tokens and truncates the same way.
+      nextNudge = cause === EMPTY_CAUSES.MAX_TOKENS
+        ? 'Continue your answer exactly from the last word you wrote. Do not repeat anything you already wrote, just finish the answer.'
         : 'Please answer the previous message in full.';
-      onChunk(`${buf}\n\n…[retrying: ${causeText(cause)}]\n`);
-      // The nudge goes to the provider as a fresh user turn so the model sees the
-      // instruction; the original prompt is kept in history by the caller.
-      void nudge;
+      onChunk(`${accumulatedText}\n\n…[retrying: ${causeText(cause)}]\n`);
       continue;
     }
 
-    onFail(`The model ${causeText(cause)}${buf.trim() ? ' (partial reply shown above)' : ''}. Try rephrasing or switching models with /model.`);
+    onFail(`The model ${causeText(cause)}${accumulatedText.trim() ? ' (partial reply shown above)' : ''}. Try rephrasing or switching models with /model.`);
     return;
   }
 }

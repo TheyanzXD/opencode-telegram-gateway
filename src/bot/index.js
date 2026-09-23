@@ -45,8 +45,12 @@ import { refresh as proxyRefresh } from '../proxy/fetcher.js';
 import { sweepDead } from '../proxy/pool.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import { PluginLoader } from '../plugins/loader.js';
+import { setupConcurrentRunner } from './runner.js';
+import { TelegramDispatcher } from './dispatcher.js';
 
 let proxyTimer = null;
+let activeRunner = null; // grammy runner handle — stopped on shutdown
+export let outboundDispatcher = null; // flood-controlled send/edit path
 async function startProxyMaintenance() {
   if (!config.proxy.enabled) return;
   // Initial refresh if pool is empty
@@ -148,16 +152,9 @@ export function createBot() {
   ]);
   startWatchdog();
 
-  if (process.env.WEBHOOK_URL || process.env.WEBHOOK_PORT) {
-    // webhook + health endpoint on the same port
-    return startWebhook(bot, {}).then((info) => {
-      logger.info(info, 'webhook mode');
-      return bot;
-    });
-  }
-  // polling mode: health on its own port so a probe still has something to hit
-  if (process.env.HEALTH_PORT !== '0') startHealthServer();
-
+  // bot.catch belongs on the instance, not inside the webhook branch — it was
+  // unreachable in webhook mode, so an error there became an unhandled rejection
+  // instead of a logged, swallowed one.
   bot.catch((err) => {
     logger.error({ err: err.message, ctx: err.ctx?.update?.update_id }, 'bot error');
   });
@@ -185,10 +182,39 @@ export function createBot() {
     await next();
   });
 
-  // Announce readiness to any subscribed system.
+  return bot;
+}
+
+/**
+ * Start the bot's transport. createBot() stays synchronous — it only builds the
+ * instance and wires middleware. Everything actually async (webhook attach,
+ * health server) lives here, so `run()` cannot mistake a Promise for a Bot.
+ *
+ * @param {import('grammy').Bot} bot
+ */
+export async function startGateway(bot) {
+  // drop_pending_updates wipes every unprocessed update. That is an emergency
+  // tool (a flood loop or a poisoned queue), not a default: with it always on,
+  // any restart during a burst silently destroys user messages.
+  const dropPending = /^(1|true|yes|on)$/i.test(String(process.env.DROP_PENDING_UPDATES || ''));
+
+  if (process.env.WEBHOOK_URL || process.env.WEBHOOK_PORT) {
+    // webhook + health endpoint on the same port
+    const info = await startWebhook(bot, {});
+    logger.info(info, 'webhook mode');
+    return { mode: 'webhook', info };
+  }
+
+  // polling mode: health on its own port so a probe still has something to hit
+  if (process.env.HEALTH_PORT !== '0') startHealthServer();
+
+  await bot.api.deleteWebhook({ drop_pending_updates: dropPending });
+
+  // Announce readiness once the transport is actually listening, not when the
+  // instance was merely constructed.
   emit('gateway.started', { uptime_target: process.uptime() }).catch(() => {});
 
-  return bot;
+  return { mode: 'polling', dropPending };
 }
 
 export async function run() {
@@ -198,7 +224,7 @@ export async function run() {
     process.exit(1);
   }
   const bot = createBot();
-  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  await startGateway(bot); // webhook attach / deleteWebhook / health server
   await startProxyMaintenance();
 
   const plugins = new PluginLoader({ dir: config.plugins.dir, enabled: config.plugins.enabled });
@@ -225,18 +251,29 @@ export async function run() {
     if (ctx.has?.('message')) await plugins.emitMessage(ctx);
     return next();
   });
-  // bot.start() rejects on 401/409 — without await+catch it becomes an
+
+  // Flood-controlled outbound path: every send/edit the bot makes is queued
+  // here so a burst can never exceed Telegram's per-bot and per-chat limits.
+  // Handlers that call ctx.api directly still work — this is the path for the
+  // places that stream and edit in a tight loop.
+  outboundDispatcher = new TelegramDispatcher(bot.api, {
+    globalRps: config.dispatcher?.globalRps || 28,
+    perChatDelayMs: config.dispatcher?.perChatDelayMs || 1050,
+  });
+
+  // Concurrent update processing: different chats in parallel, one chat FIFO.
+  // bot.start() rejects on 401/409 — without a catch it becomes an
   // unhandledRejection and the process lingers as a zombie with dead polling.
-  bot
-    .start({
-      onStart: (botInfo) => logger.info({ username: botInfo.username }, 'bot online'),
-    })
-    .catch((err) => {
-      logger.error({ err: err.message }, 'polling stopped');
-      process.exit(1);
-    });
+  try {
+    activeRunner = await setupConcurrentRunner(bot, { concurrency: 50 });
+  } catch (err) {
+    logger.error({ err: err.message }, 'polling stopped');
+    process.exit(1);
+  }
 }
 
 export function shutdown() {
   if (proxyTimer) clearInterval(proxyTimer);
+  activeRunner?.stop?.();
+  activeRunner = null;
 }

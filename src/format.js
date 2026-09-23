@@ -132,6 +132,118 @@ export function splitLong(text, max = 4000) {
   return out;
 }
 
+/**
+ * Split long Markdown so every chunk is independently VALID Telegram Markdown.
+ *
+ * splitLong() above cuts on whitespace without looking at fences, so a split
+ * landing inside a ``` block leaves chunk 1 with an opener that never closes
+ * and chunk 2 with a closer that never opened. Telegram rejects both with
+ * 400 Bad Request and the reply never arrives.
+ *
+ * This is a state machine over lines: it tracks whether it is inside a fenced
+ * block and which language the fence opened with. When a chunk must close
+ * mid-fence, it appends a closing fence to the current chunk and re-opens the
+ * same language at the top of the next one. Every emitted chunk therefore has
+ * balanced fences by construction.
+ *
+ * @param {string} text
+ * @param {number} [max=3900] target max length per chunk
+ * @returns {string[]} balanced chunks
+ */
+export function splitMarkdownSafely(text, max = 3900) {
+  if (typeof text !== 'string' || !text) return [];
+  if (text.length <= max) return [text];
+
+  // One pass over the text. Track fence state; when the buffer would overflow,
+  // emit a chunk. A cut inside a fence closes it and reopens it in the next
+  // chunk, so every chunk is a complete, valid document on its own.
+  const FENCE = '```';
+  const OPEN = (lang) => FENCE + lang + '\n';   // the fence markup itself
+  const CLOSE = '\n' + FENCE;                    // closing markup
+
+  const lines = text.split('\n');
+  const chunks = [];
+  let current = '';
+  let inCodeFence = false;
+  let codeLanguage = '';
+
+  for (const line of lines) {
+    const isFenceLine = line.startsWith(FENCE);
+
+    // what this line would add to the buffer, including markup if mid-block
+    const adds =
+      (current ? 1 : 0) +                       // the newline separator
+      (isFenceLine ? FENCE.length : line.length) +
+      (inCodeFence && !isFenceLine ? CLOSE.length : 0);
+
+    // A line that cannot fit on its own is cut in place below; everything else
+    // flushes first, respecting the fence.
+    if (line.length <= max && current.length + adds > max && current.trim().length > 0) {
+      if (inCodeFence) current += CLOSE;
+      chunks.push(current);
+      current = inCodeFence ? OPEN(codeLanguage) : '';
+    }
+
+    if (isFenceLine) {
+      if (!inCodeFence) {
+        inCodeFence = true;
+        codeLanguage = line.slice(FENCE.length).trim();
+        current += (current ? '\n' : '') + line;
+        continue; // the fence belongs to the block, not to the cut logic below
+      }
+      inCodeFence = false;
+      codeLanguage = '';
+    }
+
+    if (line.length > max) {
+      // No newline to break on — cut the line where we stand. Inside a fence the
+      // cuts keep the block whole across chunks; the piece is sized so the
+      // finished chunk (markup included) cannot exceed the limit.
+      const lang = codeLanguage;
+      const open = inCodeFence ? OPEN(lang) : '';
+      const close = inCodeFence ? CLOSE : '';
+      let rest = line;
+      let prefix = current;                          // holds the open fence already
+      current = '';
+      let first = true;
+
+      while (rest.length > 0) {
+        // first chunk reuses the fence already sitting in prefix; later ones
+        // open their own, so the markup is counted exactly once per chunk
+        const sep = prefix && !prefix.endsWith('\n') ? 1 : 0;
+        const markup = (first ? 0 : open.length) + close.length + sep;
+        const room = max - prefix.length - markup;
+        if (rest.length <= room && !first) break;
+        let cut = Math.max(64, Math.min(room, rest.length));
+        if (!inCodeFence) {                          // prefer a word boundary in prose
+          const spaceAt = rest.slice(0, cut).lastIndexOf(' ');
+          if (spaceAt > max * 0.3) cut = spaceAt;
+        }
+        const piece = rest.slice(0, cut);
+        rest = rest.slice(cut).replace(/^ /, '');
+
+        chunks.push(prefix + (sep ? '\n' : '') + (first ? '' : open) + piece + close);
+        prefix = '';                                 // the open fence is added above
+        first = false;
+      }
+      if (rest.length) {
+        // the remainder reopens the fence — the closing line will end the block
+        current = (inCodeFence ? open : '') + rest;
+      }
+      continue;
+    }
+
+    current += (current ? '\n' : '') + line;
+  }
+
+  if (current.trim().length > 0) {
+    if (inCodeFence) current += CLOSE;             // unterminated fence in the tail
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
 /** MarkdownV2 escaping, for the one place that needs the strict spec. */
 export function escapeV2(s) {
   return String(s).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (m) => '\\' + m);

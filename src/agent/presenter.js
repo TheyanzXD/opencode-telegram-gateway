@@ -1,7 +1,13 @@
-// language: JavaScript (Node 18+ ESM), file: src/agent/presenter.js
+// language: JavaScript (Node 20+ ESM), file: src/agent/presenter.js
 // Buffers engine events and edits one Telegram message on a debounce.
 // Telegram allows ~1 edit/sec per message; the engine emits far faster than that.
 // Coalesces: tokens append, tool logs stack, approval replaces the body with a keyboard.
+//
+// Hardening (v2): flush() is serialized by an async mutex. Before, a token
+// arriving mid-flush started a SECOND editMessageText before the first finished
+// — two overlapping edits on one message race to the same message_id and
+// Telegram answers the loser with 429 or a mangled render. A retry_after in
+// the error now parks the schedule until Telegram's own window says it is safe.
 
 import { toTelegramMarkdown, splitLong } from '../format.js';
 import { resolveApproval } from './approvals.js';
@@ -37,6 +43,34 @@ export class TelegramPresenter {
     this.dirty = false;
     this.done = false;
     this.lastEdit = 0;
+    // async-mutex state — flush() is re-entrant safe now
+    this.isFlushing = false;
+    this.pendingFlush = false;
+    this.lastSentBody = ''; // smart-diff baseline
+    // epoch ms; while Date.now() < this, Telegram told us to wait
+    this.backoffUntil = 0;
+    // typing heartbeat: sendChatAction every 4.5 s while work is in flight
+    this.typingTimer = null;
+  }
+
+  /**
+   * A typing action every 4.5 s while the model or a tool is working. Without
+   * it the chat shows nothing during a long tool turn and the user assumes the
+   * bot died. Telegram clears the indicator after ~5 s, so re-send before that.
+   */
+  startTypingHeartbeat() {
+    this.stopTypingHeartbeat();
+    const beat = async () => {
+      try { await this.api.sendChatAction(this.chatId, 'typing'); }
+      catch { /* a failed indicator must not kill the turn */ }
+    };
+    beat();
+    this.typingTimer = setInterval(beat, 4500);
+    this.typingTimer.unref?.();
+  }
+
+  stopTypingHeartbeat() {
+    if (this.typingTimer) { clearInterval(this.typingTimer); this.typingTimer = null; }
   }
 
   /** Send the initial placeholder and remember its id for later edits. */
@@ -90,13 +124,26 @@ export class TelegramPresenter {
     this.schedule();
   }
 
-  schedule() {
+  schedule(delay = null) {
     if (this.timer) return;
     const elapsed = Date.now() - this.lastEdit;
-    const wait = this.done ? 0 : Math.max(0, this.debounceMs - elapsed);
+    const base = delay !== null ? delay : this.done ? 0 : this.adaptiveDebounce(elapsed);
+    const wait = Math.max(0, base - elapsed);
     this.timer = setTimeout(() => this.flush(), wait);
     // unref so a hung edit never blocks process exit
     this.timer.unref?.();
+  }
+
+  /**
+   * Adaptive debounce: fast at first (the reply feels instant), then slower as
+   * the turn drags on. A 15 s answer edited every 750 ms would burn 20 edits
+   * for one message; the same turn at 1800 ms uses 8 and never hits the limit.
+   * @param {number} elapsed ms since the last edit
+   */
+  adaptiveDebounce(elapsed) {
+    if (elapsed < 2_000) return 750;
+    if (elapsed < 5_000) return 1_200;
+    return 1_800;
   }
 
   render() {
@@ -106,10 +153,37 @@ export class TelegramPresenter {
 
   async flush() {
     this.timer = null;
+
+    // Mutex: a flush already in flight must not race a second edit on the same
+    // message_id. The late token is queued and runs when this one lands.
+    if (this.isFlushing) {
+      this.pendingFlush = true;
+      return;
+    }
+
     if (!this.dirty || this.messageId == null) return;
-    this.dirty = false;
-    this.lastEdit = Date.now();
+
+    // Telegram told us to wait: honor it instead of re-queueing a 429 loop.
+    if (Date.now() < this.backoffUntil) {
+      this.schedule(this.backoffUntil - Date.now() + 100);
+      return;
+    }
+
+    this.isFlushing = true;
+
+    // Smart diff: a tiny delta mid-stream is not worth an API call. Telegram
+    // would show the same visible text, and the edit costs against the
+    // per-message rate limit. Wait for the next interval instead.
     const body = this.render();
+    if (!this.done && this.lastSentBody && body.length - this.lastSentBody.length < 12) {
+      this.isFlushing = false;
+      this.dirty = true;
+      this.schedule(this.debounceMs);
+      return;
+    }
+
+    this.dirty = false;
+    this.lastSentBody = body;
     try {
       const text = this.done ? toTelegramMarkdown(body) || TRUNC : body;
       const opts = this.done ? { parse_mode: 'Markdown' } : {};
@@ -118,9 +192,27 @@ export class TelegramPresenter {
       } else {
         await this.api.editMessageText(this.chatId, this.messageId, text, opts);
       }
+      this.lastEdit = Date.now();
     } catch (err) {
-      // "message is not modified" fires when the debounce fires twice with the same body
-      if (!/not modified/i.test(err.message)) logger.debug({ err: err.message }, 'edit failed');
+      const msg = String(err?.message || '');
+      // 429: Telegram says when we may edit again — park the schedule and keep
+      // the buffer, so the retry lands instead of being dropped.
+      const m = msg.match(/retry after (\d+)/i);
+      if (m) {
+        const sec = parseInt(m[1], 10) || 3;
+        this.backoffUntil = Date.now() + sec * 1000;
+        this.dirty = true;
+        this.schedule(sec * 1000 + 100);
+        logger.warn({ sec }, 'edit throttled by Telegram; backing off');
+      } else if (!/not modified/i.test(msg)) {
+        logger.debug({ err: msg }, 'edit failed');
+      }
+    } finally {
+      this.isFlushing = false;
+      if (this.pendingFlush) {
+        this.pendingFlush = false;
+        this.schedule(this.debounceMs);
+      }
     }
   }
 
@@ -144,6 +236,7 @@ export class TelegramPresenter {
 
   async finalize() {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    this.stopTypingHeartbeat();
     this.done = true;
     await this.flush();
   }

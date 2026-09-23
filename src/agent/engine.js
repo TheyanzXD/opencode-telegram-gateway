@@ -126,6 +126,11 @@ export class AgentEngine {
       convo.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
 
       // 3. Run every requested tool.
+      // OpenAI-compatible providers REQUIRE a role:'tool' reply for EVERY
+      // tool_call_id in the assistant turn — one missing response and the next
+      // request is rejected as a mismatched history and the whole turn dies.
+      // So a tool that throws still gets a synthetic error response; the loop
+      // can continue and the model can recover.
       for (const call of msg.tool_calls) {
         const name = call.function.name;
         let args;
@@ -186,7 +191,20 @@ export class AgentEngine {
           this.onEvent({ type: 'toolStart', tool: name, args });
         }
         const t0 = Date.now();
-        const result = await this.registry.execute(name, args, { chatId, userId });
+        let result;
+        try {
+          result = await this.registry.execute(name, args, { chatId, userId });
+        } catch (err) {
+          // Isolated failure: this tool_call still gets a role:'tool' response
+          // so the provider history stays valid and the next turn can proceed.
+          // A throw here used to abort the whole run mid-loop, leaving the
+          // assistant's tool_calls unanswered.
+          const out = `⚠️ tool crashed: ${err?.message || 'unknown error'}`;
+          this.onEvent({ type: 'toolEnd', tool: name, output: out, isError: true });
+          this.tracer.toolCall(name, Date.now() - t0, false, out);
+          convo.push(this.toolResult(call.id, name, out));
+          continue;
+        }
         const output = String(result.content).slice(0, MAX_TURN_CHARS);
         this.onEvent({ type: 'toolEnd', tool: name, output, isError: result.isError });
         this.tracer.toolCall(name, Date.now() - t0, !result.isError, output);
