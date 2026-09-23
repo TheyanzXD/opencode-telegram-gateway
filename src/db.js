@@ -7,15 +7,45 @@ import { logger } from './logger.js';
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 
 export const db = new Database(config.dbPath);
+
+// --- High-performance tuning (v2) -------------------------------------------
+// WAL: readers never block the writer, and the writer never blocks readers.
+// synchronous=NORMAL is safe under WAL (no corruption on power loss — the WAL
+// is fsynced on checkpoint; only the last transaction may be lost) and cuts
+// commit latency by an order of magnitude vs FULL.
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+// Page cache: negative = kilobytes, so -64000 ≈ 64 MB of hot pages in RAM.
+db.pragma('cache_size = -64000');
+// Memory-mapped reads: the file is mapped into the address space, so a read
+// hits the page cache directly instead of going through a read() syscall.
+db.pragma('mmap_size = 268435456'); // 256 MB
+db.pragma('temp_store = MEMORY');
+// 5 s is generous under WAL; a busy write holds the lock far shorter now.
+db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
+
+/**
+ * Prepared statement cache. db.prepare() parses and plans SQL every call —
+ * on a hot message path that is pure wasted CPU. Compile once, reuse forever.
+ * The map is keyed by the SQL string itself, which is exact and stable.
+ */
+const stmtCache = new Map();
+export function getStatement(sql) {
+  let stmt = stmtCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    stmtCache.set(sql, stmt);
+  }
+  return stmt;
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   user_id        INTEGER PRIMARY KEY,
   username       TEXT,
   first_name     TEXT,
-  last_name      TEXT,
+  last_name     TEXT,
   is_banned      INTEGER NOT NULL DEFAULT 0,
   is_admin       INTEGER NOT NULL DEFAULT 0,
   provider       TEXT NOT NULL,
@@ -97,12 +127,12 @@ CREATE TABLE IF NOT EXISTS memory (
 CREATE INDEX IF NOT EXISTS idx_memory_user ON memory(user_id, updated_at DESC);
 `);
 
-logger.info({ dbPath: config.dbPath }, 'database ready');
+logger.info({ dbPath: config.dbPath }, 'database ready (WAL + prepared-statement cache)');
 
 // ---- users ----
 export function upsertUser({ user_id, username, first_name, last_name }) {
   const now = Date.now();
-  db.prepare(`
+  getStatement(`
     INSERT INTO users (user_id, username, first_name, last_name, provider, model, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET
@@ -116,42 +146,42 @@ export function upsertUser({ user_id, username, first_name, last_name }) {
 }
 
 export function getUser(user_id) {
-  return db.prepare('SELECT * FROM users WHERE user_id = ?').get(user_id) || null;
+  return getStatement('SELECT * FROM users WHERE user_id = ?').get(user_id) || null;
 }
 
 export function setUserModel(user_id, provider, model) {
-  db.prepare('UPDATE users SET provider = ?, model = ?, updated_at = ? WHERE user_id = ?')
+  getStatement('UPDATE users SET provider = ?, model = ?, updated_at = ? WHERE user_id = ?')
     .run(provider, model, Date.now(), user_id);
 }
 export function setUserTemperature(user_id, temperature) {
-  db.prepare('UPDATE users SET temperature = ?, updated_at = ? WHERE user_id = ?')
+  getStatement('UPDATE users SET temperature = ?, updated_at = ? WHERE user_id = ?')
     .run(temperature, Date.now(), user_id);
 }
 export function setUserSystemPrompt(user_id, system_prompt) {
-  db.prepare('UPDATE users SET system_prompt = ?, updated_at = ? WHERE user_id = ?')
+  getStatement('UPDATE users SET system_prompt = ?, updated_at = ? WHERE user_id = ?')
     .run(system_prompt, Date.now(), user_id);
 }
 export function setBanned(user_id, is_banned) {
-  db.prepare('UPDATE users SET is_banned = ?, updated_at = ? WHERE user_id = ?')
+  getStatement('UPDATE users SET is_banned = ?, updated_at = ? WHERE user_id = ?')
     .run(is_banned ? 1 : 0, Date.now(), user_id);
 }
 
 // ---- messages ----
 export function addMessage(user_id, role, content, tokens = null, sessionId = null) {
-  db.prepare(`
+  getStatement(`
     INSERT INTO messages (user_id, session_id, role, content, tokens, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(user_id, sessionId, role, content, tokens, Date.now());
 }
 export function getHistory(user_id, limit = config.historyLimit, sessionId = null) {
   if (sessionId) {
-    return db.prepare(`
+    return getStatement(`
       SELECT * FROM (
         SELECT * FROM messages WHERE user_id = ? AND session_id = ? ORDER BY id DESC LIMIT ?
       ) ORDER BY id ASC
     `).all(user_id, sessionId, limit);
   }
-  return db.prepare(`
+  return getStatement(`
     SELECT * FROM (
       SELECT * FROM messages WHERE user_id = ? ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
@@ -159,18 +189,18 @@ export function getHistory(user_id, limit = config.historyLimit, sessionId = nul
 }
 export function clearHistory(user_id, sessionId = null) {
   if (sessionId) {
-    return db.prepare('DELETE FROM messages WHERE user_id = ? AND session_id = ?').run(user_id, sessionId).changes;
+    return getStatement('DELETE FROM messages WHERE user_id = ? AND session_id = ?').run(user_id, sessionId).changes;
   }
-  return db.prepare('DELETE FROM messages WHERE user_id = ?').run(user_id).changes;
+  return getStatement('DELETE FROM messages WHERE user_id = ?').run(user_id).changes;
 }
 export function sessionMessagesAll(user_id, sessionId) {
-  return db.prepare('SELECT * FROM messages WHERE user_id = ? AND session_id = ? ORDER BY id ASC').all(user_id, sessionId);
+  return getStatement('SELECT * FROM messages WHERE user_id = ? AND session_id = ? ORDER BY id ASC').all(user_id, sessionId);
 }
 
 // ---- usage ----
 export function recordUsage({ user_id, provider, model, usage }) {
   if (!usage) return;
-  db.prepare(`
+  getStatement(`
     INSERT INTO usage (user_id, provider, model, prompt_tokens, completion_tokens, total_tokens, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(user_id, provider, model,
@@ -180,52 +210,52 @@ export function recordUsage({ user_id, provider, model, usage }) {
 
 // ---- stats ----
 export function stats() {
-  const u = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  const b = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_banned = 1').get().c;
-  const m = db.prepare('SELECT COUNT(*) AS c FROM messages').get().c;
-  const tot = db.prepare('SELECT COALESCE(SUM(total_tokens),0) AS s FROM usage').get().s;
+  const u = getStatement('SELECT COUNT(*) AS c FROM users').get().c;
+  const b = getStatement('SELECT COUNT(*) AS c FROM users WHERE is_banned = 1').get().c;
+  const m = getStatement('SELECT COUNT(*) AS c FROM messages').get().c;
+  const tot = getStatement('SELECT COALESCE(SUM(total_tokens),0) AS s FROM usage').get().s;
   return { users: u, banned: b, messages: m, total_tokens: tot };
 }
 
 // ---- sessions ----
 export function createSession(user_id, name) {
   const now = Date.now();
-  db.prepare('INSERT INTO sessions (user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+  getStatement('INSERT INTO sessions (user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
     .run(user_id, name, now, now);
   // Set all user's sessions inactive, then activate this one
-  db.prepare('UPDATE sessions SET is_active = 0 WHERE user_id = ?').run(user_id);
-  db.prepare('UPDATE sessions SET is_active = 1 WHERE user_id = ? AND name = ?').run(user_id, name);
+  getStatement('UPDATE sessions SET is_active = 0 WHERE user_id = ?').run(user_id);
+  getStatement('UPDATE sessions SET is_active = 1 WHERE user_id = ? AND name = ?').run(user_id, name);
   return getSession(user_id, name);
 }
 export function getSession(user_id, name) {
-  return db.prepare('SELECT * FROM sessions WHERE user_id = ? AND name = ?').get(user_id, name) || null;
+  return getStatement('SELECT * FROM sessions WHERE user_id = ? AND name = ?').get(user_id, name) || null;
 }
 export function listSessions(user_id) {
-  return db.prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC').all(user_id);
+  return getStatement('SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC').all(user_id);
 }
 export function deleteSession(user_id, name) {
   const sess = getSession(user_id, name);
   if (!sess) return 0;
   // Detach messages (keep as orphan history), then delete the session row.
-  db.prepare('UPDATE messages SET session_id = NULL WHERE session_id = ?').run(sess.id);
-  db.prepare('DELETE FROM sessions WHERE id = ?').run(sess.id);
+  getStatement('UPDATE messages SET session_id = NULL WHERE session_id = ?').run(sess.id);
+  getStatement('DELETE FROM sessions WHERE id = ?').run(sess.id);
   return 1;
 }
 export function activateSession(user_id, name) {
   const sess = getSession(user_id, name);
   if (!sess) return null;
-  db.prepare('UPDATE sessions SET is_active = 0 WHERE user_id = ?').run(user_id);
-  db.prepare('UPDATE sessions SET is_active = 1, updated_at = ? WHERE id = ?').run(Date.now(), sess.id);
+  getStatement('UPDATE sessions SET is_active = 0 WHERE user_id = ?').run(user_id);
+  getStatement('UPDATE sessions SET is_active = 1, updated_at = ? WHERE id = ?').run(Date.now(), sess.id);
   return sess;
 }
 export function getActiveSession(user_id) {
-  return db.prepare('SELECT * FROM sessions WHERE user_id = ? AND is_active = 1').get(user_id) || null;
+  return getStatement('SELECT * FROM sessions WHERE user_id = ? AND is_active = 1').get(user_id) || null;
 }
 
 // ---- proxies ----
 export function upsertProxy({ scheme, host, port, username, password, source }) {
   const now = Date.now();
-  db.prepare(`
+  getStatement(`
     INSERT INTO proxies (scheme, host, port, username, password, source, last_seen, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(scheme, host, port, username) DO UPDATE SET
@@ -233,7 +263,7 @@ export function upsertProxy({ scheme, host, port, username, password, source }) 
   `).run(scheme, host, port, username ?? null, password ?? null, source || null, now, now);
 }
 export function pickRandomProxy() {
-  return db.prepare(`
+  return getStatement(`
     SELECT * FROM proxies
     WHERE fails < 5
     ORDER BY RANDOM()
@@ -242,13 +272,13 @@ export function pickRandomProxy() {
 }
 export function pickProxyForChat(chatId) {
   // Stable pick: hash(chatId) → same proxy per chat, falls back to direct if pool empty
-  const ids = db.prepare('SELECT id FROM proxies WHERE fails < 5 ORDER BY id').all();
+  const ids = getStatement('SELECT id FROM proxies WHERE fails < 5 ORDER BY id').all();
   if (!ids.length) return null;
   let h = 0;
   for (const c of String(chatId)) h = (h * 31 + c.charCodeAt(0)) | 0;
   const idx = Math.abs(h) % ids.length;
   const id = ids[idx].id;
-  return db.prepare('SELECT * FROM proxies WHERE id = ?').get(id);
+  return getStatement('SELECT * FROM proxies WHERE id = ?').get(id);
 }
 export function pickProxyForChatWithRotation(chatId) {
   // Try the stable pick; if it has failed too many times, fall back to any
@@ -258,18 +288,18 @@ export function pickProxyForChatWithRotation(chatId) {
   return pickRandomProxy();
 }
 export function proxyOk(id) {
-  db.prepare('UPDATE proxies SET ok_count = ok_count + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
+  getStatement('UPDATE proxies SET ok_count = ok_count + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
 }
 export function proxyFail(id) {
-  db.prepare('UPDATE proxies SET fails = fails + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
+  getStatement('UPDATE proxies SET fails = fails + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
 }
 export function proxyStats() {
   return {
-    total: db.prepare('SELECT COUNT(*) AS c FROM proxies').get().c,
-    healthy: db.prepare('SELECT COUNT(*) AS c FROM proxies WHERE fails < 5').get().c,
-    dead: db.prepare('SELECT COUNT(*) AS c FROM proxies WHERE fails >= 5').get().c,
+    total: getStatement('SELECT COUNT(*) AS c FROM proxies').get().c,
+    healthy: getStatement('SELECT COUNT(*) AS c FROM proxies WHERE fails < 5').get().c,
+    dead: getStatement('SELECT COUNT(*) AS c FROM proxies WHERE fails >= 5').get().c,
   };
 }
 export function pruneProxies() {
-  return db.prepare('DELETE FROM proxies WHERE fails >= 20').run().changes;
+  return getStatement('DELETE FROM proxies WHERE fails >= 20').run().changes;
 }

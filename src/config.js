@@ -95,6 +95,22 @@ export const config = {
     sessionTtlDays: int(process.env.SESSION_TTL_DAYS, 30),
     // DLQ + secret redaction are always on; these only tune the noise level
     redactEnvInOutput: bool(process.env.REDACT_ENV, true),
+    // Sandbox engine for execute_bash: 'process' (env+path jail, always
+    // available) or 'bwrap' (Linux namespaces; degrades to process when the
+    // binary is missing instead of failing every tool call)
+    sandboxEngine: String(process.env.AGENT_SANDBOX_ENGINE || 'process').toLowerCase(),
+  },
+  // Two-tier cache. L1 is in-process and always on; L2 (Redis/KeyDB) is opt-in
+  // for multi-node and unused on a single-node deploy.
+  cache: {
+    redisUrl: process.env.REDIS_URL || '',
+    l1MaxEntries: int(process.env.CACHE_L1_MAX, 1024),
+  },
+  // Outbound flood control. Telegram's limits are hard and a 429 costs the
+  // message; the dispatcher paces sends instead of hoping for the best.
+  dispatcher: {
+    globalRps: int(process.env.DISPATCHER_GLOBAL_RPS, 28),
+    perChatDelayMs: int(process.env.DISPATCHER_PER_CHAT_DELAY_MS, 1050),
   },
   // model fallback chain — a provider going down should not take the bot down
   fallback: {
@@ -118,6 +134,8 @@ export const config = {
     refreshHours: int(process.env.PROXY_REFRESH_HOURS, 6),
     // optional local file of authenticated proxies (user:pass@ip:port)
     premiumFile: process.env.PROXY_PREMIUM_FILE || '',
+    // bounded LRU size for ProxyAgent instances (each one pins sockets+fds)
+    maxLruAgents: int(process.env.PROXY_MAX_LRU_AGENTS, 256),
   },
   admin: {
     requireChannel: bool(process.env.ADMIN_REQUIRE_CHANNEL, true),
