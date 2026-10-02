@@ -2,6 +2,11 @@ import { config } from '../../config.js';
 import { chatCompletion, modelSupportsVision } from '../../providers/client.js';
 import { ensureUser, buildMessages, persistTurn, currentSessionId } from '../../conversation.js';
 import { recordUsage } from '../../db.js';
+import { remainingQuota } from '../commands/usage.js';
+import {
+  replyContext, rememberAnswer, regenKeyboard, stopKeyboard,
+  abortControllerFor, releaseAbortController,
+} from '../features/threads.js';
 import { logger } from '../../logger.js';
 import { runAgent } from '../../agent/loop.js';
 
@@ -65,6 +70,9 @@ export async function onText(ctx) {
   const chatId = ctx.chat.id;
   const text = ctx.message.text || '';
   if (text.startsWith('/')) return; // commands handled elsewhere
+  // If the agent asked a question and the user typed instead of tapping a
+  // button, this is the answer. Consume it and stay out of the normal path.
+  if (answerByText(ctx.chat?.id ?? ctx.from?.id, text)) return;
   if (text.length > config.maxInputChars) {
     return ctx.reply(`⚠️ Message too long (${text.length}/${config.maxInputChars}).`);
   }
@@ -108,6 +116,11 @@ async function handlePrompt(ctx, userText, media) {
   const chatId = ctx.chat.id;
   const sessionId = currentSessionId(user.user_id);
 
+  const left = remainingQuota(user.user_id);
+  if (left != null && left <= 0) {
+    return ctx.reply('⛔ Daily token quota reached. Resets at 00:00 UTC. Ask the operator to raise it: /quota');
+  }
+
   if (media.length) {
     const hasVision = config.vision.provider && config.vision.model;
     if (!hasVision && !modelSupportsVision(user.provider, user.model)) {
@@ -118,7 +131,50 @@ async function handlePrompt(ctx, userText, media) {
   const provider = media.length && config.vision.provider ? config.vision.provider : user.provider;
   const model = media.length && config.vision.model ? config.vision.model : user.model;
 
-  const messages = buildMessages(user, userText, sessionId);
+  const messages = await buildStableMessages(user, userText, {
+    history: await loadHistory(user.user_id, sessionId),
+    runtimeContext: runtimeContext({ sessionName: sessionId, workspace: process.cwd() }),
+  });
+
+  // Tools are on in plain chat, not just /agent. The model must know it sits
+  // on a real host with a tool loop, or it answers "I cannot access files" —
+  // which is wrong here. The brief teaches it; the notice tells it when to
+  // reach for a tool vs. answer straight.
+  const brief = {
+    role: 'system',
+    content: architectureBrief({ workspace: process.cwd(), chatId: ctx.chat?.id }),
+  };
+  const notice = {
+    role: 'system',
+    content: 'You have tool-calling enabled in this conversation and may use tools to act on this host: read and edit files, run commands and scripts, search the web or browse. When a task benefits from a tool, call it and report the real result — do not claim you cannot act. Only tools that change state ask for approval.',
+  };
+  // Below soul/skills/memory, above the last user message.
+  messages.push({ role: 'system', content: brief.content });
+  messages.push({ role: 'system', content: notice.content });
+
+  // Skills + memory are injected BELOW the cached prefix, as their own system
+  // messages. Changing them does not invalidate the prompt cache.
+  const skills = selectSkills(userText);
+  const skillText = skillBlock(skills);
+  if (skillText) messages.splice(1, 0, { role: 'system', content: skillText });
+
+  const memText = memoryBlock(user.user_id);
+  if (memText) messages.splice(1, 0, { role: 'system', content: memText });
+
+  // Pinned turns: load-bearing instructions the user marked to keep.
+  const pinText = ctx.session?.pinnedBlock;
+  if (pinText) messages.splice(1, 0, { role: 'system', content: pinText });
+
+  // A reply to an older message carries the turns around it as context.
+  const ctxMsgs = ctx.threads?.replyContext(sessionId);
+  if (ctxMsgs?.length) {
+    messages.splice(messages.length - 1, 0,
+      { role: 'system', content: 'Context the user replied to (continue from here):' },
+      ...ctxMsgs,
+    );
+  }
+
+  autoLearn(user.user_id, userText, '');
   if (media.length) {
     messages[messages.length - 1] = {
       role: 'user',
@@ -151,6 +207,9 @@ async function handlePrompt(ctx, userText, media) {
       provider, model, messages, chatId,
       temperature: user.temperature ?? config.defaults.temperature,
       maxTokens: config.defaults.maxTokens,
+      onApproval: (id, tool, args) => presenter.sendApproval(id, tool, args),
+      onEvent: (evt) => presenter.push(evt),
+      stream: (args) => streamChatCompletion(args),
     });
     persistTurn(user.user_id, userText, content, usage, sessionId);
     recordUsage({ user_id: user.user_id, provider, model, usage });

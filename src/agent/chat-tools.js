@@ -1,0 +1,206 @@
+// language: JavaScript (Node 20+ ESM), file: src/agent/chat-tools.js
+// Tool-calling in plain chat — not just /agent.
+//
+// Before this, only /agent ran the registry. Plain messages went straight to
+// the LLM as a stateless chatbot: no tools list, no awareness brief, so
+// "can you edit a file?" got the generic "no" — the model had no idea it was
+// sitting on a real host with tools.
+//
+// The fix is not a new command, it is wiring the same loop the engine already
+// has into the plain-chat path: the body carries `tools`, the model may reply
+// with `tool_calls`, we run them (with the same approval/RBAC gates) and feed
+// the results back. The user never types /agent; tools are there by default.
+//
+// Approval rendering reuses the presenter so the inline keyboard works the
+// same way in chat as it does in /agent.
+
+import { requestJson, chatCompletion } from '../providers/client.js';
+import { getProvider } from '../providers/store.js';
+import { createDefaultRegistry } from './registry.js';
+import { createApproval, gateDecision } from './approvals.js';
+import { guardianVerdict } from './approval-smart.js';
+import { canRunDangerous, toolDeniedFor } from './rbac.js';
+import { logger } from '../logger.js';
+
+const MAX_TURN_CHARS = 6000;
+
+/**
+ * Run a full chat turn with tools. Returns the final assistant content.
+ *
+ * `sendToolStatus(name, args, output)` lets the caller show progress/result
+ * lines in the message being streamed. Approvals are rendered by the caller
+ * via `onApproval(id, tool, args)` when present, else auto-approve (yolo).
+ */
+
+/**
+ * Parse a provider's textual tool-call syntax into {name, arguments} pairs.
+ * Reasoning models like mercury/mercury-2.5 don't always fill the native
+ * `tool_calls` field — they emit:
+ *   <|tool_call_start|>
+ *   <function=execute_bash>
+ *   <parameter=command>
+ *   ls -la
+ *   </parameter>
+ *   </function>
+ *   <|tool_call_end|>
+ * inside the message content. We detect that and run it like a native call,
+ * rather than letting the raw markup leak to the user.
+ */
+function parseTextualToolCalls(content) {
+  if (!content || !content.includes('<|tool_call_start|>')) return null;
+  const out = [];
+  const blockRe = /<\|tool_call_start\|>([\s\S]*?)<\|tool_call_end\|>/g;
+  let m;
+  while ((m = blockRe.exec(content)) !== null) {
+    const block = m[1];
+    const fn = /<function=([\w-]+)>/.exec(block);
+    if (!fn) continue;
+    const name = fn[1].trim();
+    const args = {};
+    const paramRe = /<parameter=([\w-]+)>\n([\s\S]*?)\n<\/parameter>/g;
+    let pm;
+    while ((pm = paramRe.exec(block)) !== null) {
+      args[pm[1].trim()] = pm[2];
+    }
+    // single unnamed parameter fallback: <parameter=command> X </parameter>
+    if (!Object.keys(args).length) {
+      const un = /<parameter=([\w-]+)>\s*([\s\S]*?)\s*<\/parameter>/.exec(block);
+      if (un) args[un[1].trim()] = un[2];
+    }
+    out.push({ callId: `text_${out.length}`, name, arguments: JSON.stringify(args) });
+  }
+  return out.length ? out : null;
+}
+
+export async function chatWithTools({
+  provider, model, messages, chatId, userId,
+  temperature, maxTokens, maxTurns = 20,
+  registry = createDefaultRegistry(),
+  onApproval = null,   // (id, tool, args) => void ; null → auto-allow
+  sendToolStatus = null,
+  stream = null,       // (args) => AsyncIterable<string> — when set, the final
+                       // (non-tool) turn is streamed through this instead of the
+                       // non-streaming request. Tool turns stay non-streaming.
+  onStreamChunk = null,
+  onEvent = null,      // Hermes-style structured events: {type} where type ∈
+                       // commentary | toolStart | toolEnd | token | done | error.
+                       // Lets a presenter show live progress, not just a cursor.
+}) {
+  const emit = (type, payload = {}) => { try { onEvent?.({ type, ...payload }); } catch {} };
+  if (!getProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+
+  let convo = messages.slice();
+  const body = () => ({
+    model,
+    messages: convo,
+    temperature,
+    max_tokens: maxTokens,
+    tools: registry.toOpenAIJson(),
+    tool_choice: 'auto',
+  });
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    if (turn > 0) {
+      // between tool rounds — the Hermes `Commentary` event: the agent moves
+      // from one action to the next and the user should see the shift
+      emit('commentary', { text: `…` });
+    }
+    // Tool turns must read the full message to find tool_calls, so they are
+    // always non-streaming here. When the caller wants a visible stream, we
+    // do a single non-streaming probe turn; if it turns out to be the final
+    // (no tool_calls) turn we re-issue it through the stream. That costs one
+    // extra request per final turn, which is the price of a live stream in a
+    // tool loop — and only on the last turn, where accuracy beats latency.
+    const data = await requestJson(provider, '/chat/completions', body(), null, chatId);
+    const msg = data.choices?.[0]?.message || {};
+    const content = msg.content || '';
+    let toolCalls = msg.tool_calls || [];
+
+    // Reasoning models (mercury) may emit tool calls as text instead of the
+    // native field. Parse them so the markup does not leak to the user.
+    if (!toolCalls.length) {
+      const textCalls = parseTextualToolCalls(content);
+      if (textCalls) toolCalls = textCalls;
+    }
+
+    if (toolCalls.length) {
+      // echo the assistant turn verbatim — for native calls carry tool_calls;
+      // for textual ones the content already holds the call markup, so the
+      // next turn must not re-read it as user-visible text.
+      convo.push(toolCalls[0].callId?.startsWith?.('text_')
+        ? { role: 'assistant', content: '' }
+        : { role: 'assistant', content, tool_calls: toolCalls });
+    } else {
+      convo.push({ role: 'assistant', content });
+      if (stream) {
+        // Stream the final turn.
+        let acc = '';
+        for await (const chunk of stream({
+          provider, model, messages: convo, chatId,
+          temperature, maxTokens,
+        })) {
+          acc += chunk;
+          onStreamChunk?.(acc);
+        }
+        emit('done', { content: acc || content });
+        return { content: acc || content, convo };
+      }
+      emit('done', { content });
+      return { content, convo };
+    }
+
+    for (const call of toolCalls) {
+      const name = call.function?.name;
+      let args = {};
+      try { args = JSON.parse(call.function?.arguments || '{}'); } catch { args = {}; }
+
+      if (toolDeniedFor(userId, name)) {
+        const out = '⛔ this tool is operator-only — your account is not permitted to run it';
+        convo.push({ role: 'tool', tool_call_id: call.id, name, content: out });
+        sendToolStatus?.(name, args, out);
+        continue;
+      }
+
+      const tool = registry.get(name);
+      const dangerous = tool?.isDangerous || (typeof tool?.requiresApproval === 'function' && tool.requiresApproval(args));
+
+      if (dangerous) {
+        // Same gate as the engine: guardian, then RBAC, then keyboard.
+        const verdict = await guardianVerdict(name, args);
+        const decision = canRunDangerous(userId) ? 'allow' : gateDecision(userId, name, verdict);
+        if (decision === 'allow') {
+          // trusted role or yolo — run without a keyboard
+        } else if (decision === 'deny') {
+          const out = '⛔ denied (approval fatigue — re-enable with /yolo off first)';
+          convo.push({ role: 'tool', tool_call_id: call.id, name, content: out });
+          sendToolStatus?.(name, args, out);
+          continue;
+        } else if (onApproval) {
+          const { id, promise } = createApproval(userId, name, args);
+          onApproval(id, name, args);
+          const approved = await promise;
+          if (!approved) {
+            const out = '⛔ denied by user';
+            convo.push({ role: 'tool', tool_call_id: call.id, name, content: out });
+            sendToolStatus?.(name, args, out);
+            continue;
+          }
+        }
+        // onApproval === null → auto-allow (the caller opted out of the gate)
+      }
+
+      const t0 = Date.now();
+      emit('toolStart', { tool: name, args });
+      const result = await registry.execute(name, args, { chatId, userId });
+      const output = String(result.content).slice(0, MAX_TURN_CHARS);
+      const ms = Date.now() - t0;
+      logger.debug({ tool: name, ms, isError: result.isError }, 'chat tool ran');
+      emit('toolEnd', { tool: name, ms, ok: !result.isError, isError: result.isError });
+      sendToolStatus?.(name, args, output);
+      convo.push({ role: 'tool', tool_call_id: call.id, name, content: output });
+    }
+    // loop back: let the model see the tool results
+  }
+  emit('error', { message: 'reached the tool-turn cap without a final answer' });
+  return { content: '⚠️ reached the tool-turn cap without a final answer.', convo };
+}

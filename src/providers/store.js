@@ -103,3 +103,19 @@ export function saveProviders(providers) {
   fs.writeFileSync(PROVIDERS_FILE, YAML.stringify(parsed));
   cache = null;
 }
+
+// Adds a model to a provider in providers.yaml (admins only). Existing
+// models are untouched; metadata defaults to the conservative case.
+export function addModel(providerName, modelId, meta = {}) {
+  const providers = loadProviders();
+  const p = providers.find((x) => x.name === providerName);
+  if (!p) throw new Error(`Unknown provider: ${providerName}`);
+  if (p.models[modelId]) throw new Error(`${providerName}/${modelId} already exists`);
+  p.models[modelId] = {
+    context: Number(meta.context) > 0 ? Number(meta.context) : undefined,
+    vision: meta.vision === true || meta.vision === 'true' ? true : undefined,
+  };
+  Object.keys(p.models[modelId]).forEach((k) => p.models[modelId][k] === undefined && delete p.models[modelId][k]);
+  saveProviders(providers);
+  return true;
+}

@@ -3,6 +3,10 @@ node_modules/
 data/
 mcp.json
 *.log
+premium-proxy-list.txt
+proxy-premium*.txt
 .DS_Store
 dist/
 coverage/
+workspace/
+data/browser-state/

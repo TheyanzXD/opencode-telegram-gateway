@@ -54,6 +54,9 @@ export const config = {
     token: process.env.TELEGRAM_BOT_TOKEN || '',
     allowed: csv(process.env.TELEGRAM_ALLOWED_USERS),
     admins: csv(process.env.TELEGRAM_ADMIN_USERS),
+    // The tier below admin: these ids run dangerous tools without an approval
+    // keyboard. Empty (default) = everyone is asked. See src/agent/rbac.js.
+    toolUsers: csv(process.env.TELEGRAM_TOOL_USERS),
     homeChannel: process.env.TELEGRAM_HOME_CHANNEL || null,
   },
   defaults: {
@@ -101,10 +104,16 @@ export const config = {
     sendFileThreshold: int(process.env.AGENT_SEND_FILE_THRESHOLD_LINES, 200),
   },
   proxy: {
-    enabled: bool(process.env.PROXY_ENABLED, true),
-    target: int(process.env.PROXY_TARGET, 10000),
+    // Off by default: the pool is opt-in. Cloning and running the bot must
+    // not start fetching ten thousand open proxies.
+    enabled: bool(process.env.PROXY_ENABLED, false),
+    target: int(process.env.PROXY_TARGET, 10_000),
     rotatePerChat: bool(process.env.PROXY_PER_CHAT, true),
     refreshHours: int(process.env.PROXY_REFRESH_HOURS, 6),
+    // optional local file of authenticated proxies (user:pass@ip:port)
+    premiumFile: process.env.PROXY_PREMIUM_FILE || '',
+    // bounded LRU size for ProxyAgent instances (each one pins sockets+fds)
+    maxLruAgents: int(process.env.PROXY_MAX_LRU_AGENTS, 256),
   },
   admin: {
     requireChannel: bool(process.env.ADMIN_REQUIRE_CHANNEL, true),

@@ -23,6 +23,28 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 📜 **Pino logging** — pretty in dev, JSON in prod, redact `apiKey` automatically.
 - 🧙 **CLI setup wizard** — `npm run setup` walks you through bot token, providers, defaults. No config files to handcraft.
 - 🩺 **Doctor** — `npm run doctor` validates everything and pings each provider with a real prompt.
+- 💰 **Cost & quota** — `/usage` shows per-day and per-model spend; `QUOTA_DAILY_TOKENS` caps a user's daily tokens and `/quota <userId> <n>` overrides one user without a restart.
+- ⏹ **Stop & regenerate** — every streaming reply has a ⏹ button (keeps the partial text); ↻ regenerates from the stored prompt. Editing your own message regenerates it too.
+- 🧵 **Reply chains** — reply to an old message and the turns around it come back into context. Forum topics are separate conversations.
+- 🧠 **Personality** — `/soul set <markdown>` writes a personality file that becomes the base system prompt. Per-user, versionable, see [docs/personality.md](docs/personality.md).
+- 📌 **Pin & search** — `/pin` keeps a turn in every prompt; `/search <text>` is FTS5 across your whole history and pins.
+- 🔑 **Bring-your-own-key** — `/key set <provider> <key>` bills a user's turns to their own account, with their own fallback chain (`/key chain`).
+- 🌐 **Inline mode** — `@botname <prompt>` answers from any chat. Multi-language UI: `/lang en|id|es|ru|ja`.
+- 📤 **Outbound webhooks** — `WEBHOOK_SUBSCRIBERS` fires signed events on quota hits, agent turns, and more.
+- 🔁 **Fallback chain** — `FALLBACK_CHAIN=provider:model,...` steps down on hard failure, retries once on transient. A stream that already produced text never switches models.
+- 🩺 **Webhook + health + watchdog** — `WEBHOOK_URL` switches off polling; `GET /health` returns 200/503; the watchdog flags a silent process. `SIGHUP` reloads config without dropping connections.
+- 🔒 **Secret redaction + DLQ** — credential-shaped strings are masked before any log, reply, or webhook; a turn that fails every fallback lands in the dead-letter queue for replay.
+- 🧩 **MCP client** — `MCP_SERVERS` turns every MCP server on npm into agent tools. Stdio and HTTP transports.
+- 👶 **Subagent delegation** — `delegate_task` runs an independent subtask in its own context window and returns only the summary (max depth 2, read-only by default).
+- 💾 **Long-term memory** — `remember`/`recall` durable facts, `record_lesson` a failed approach + the fix, `record_decision` the why-not log, `scratchpad_*` working state out of the context window.
+- 🔐 **RBAC** — three tiers: chat access (`TELEGRAM_ALLOWED_USERS`), tool access (`TELEGRAM_TOOL_USERS`), operators (`TELEGRAM_ADMIN_USERS`). Dangerous tools need a one-tap approval unless the user is trusted.
+- ↩️ **`/undo`** — every mutating tool snapshots first; one command restores the last change in this user's workspace. Overwritten files go back, created files are removed.
+- 📎 **Document ingestion** — drop a `.zip` or a code file into the chat and it lands in the workspace. Zip-slip entries are refused before extraction; over-8 MB is refused with a reason.
+- 🔎 **Code intelligence** — `semantic_code_search` (RAG over the workspace), `code_symbols` (real AST), `dependency_graph` (blast radius of a change), `dead_code_scan`. `sqlite-vec` when installable, pure-JS cosine when not, and the index says which.
+- 🎨 **Image generation** — `image_generate` when a provider offers it; says plainly when none does. — drop a `.zip` or a code file into the chat and it lands in the workspace. Zip-slip entries are refused before extraction; over-8 MB is refused with a reason.
+- 🔍 **Observability** — `trace_export` a full turn trace, `cost_report` the spend breakdown. Per-user workspace isolation for every tool that touches disk.
+
+See [docs/features.md](docs/features.md) for the full reference.
 
 ## Quick start (no root)
 
@@ -37,7 +59,49 @@ npm start             # launch the bot
 
 You only need two things: a **Telegram bot token** (from [@BotFather](https://t.me/BotFather)) and **one API key** for the provider you picked as `DEFAULT_PROVIDER`. `providers.yaml` ships with public providers — OpenRouter and Groq both have free tiers that need only an email to sign up.
 
+### Optional: headless browser (agent tools)
+
+The agent's browser tools (`browser_navigate`, `browser_snapshot`, …) need
+**Camoufox** — anti-detect Firefox. On a datacenter IP, plain headless Chromium
+is hard-blocked (Google → `/sorry`, Brave → captcha); Camoufox spoofs a real
+Windows/Firefox fingerprint (`navigator.webdriver` false, matching UA/plugins/
+WebGL), which is what gets past the browser-side checks.
+
+```bash
+npx camou install
+```
+
+That is the whole setup. `src/bootstrap.js` resolves the install from the `camou`
+CLI's own registry at startup — no manual env, no patched library.
+
+The browser is then driven by the model: `/agent "find …"` calls
+`browser_navigate`, `browser_snapshot` (`@eN` refs), `browser_click`, etc.
+
+### Optional: authenticated proxies
+
+```bash
+echo 'user:pass@1.2.3.4:1081' >> premium-proxy-list.txt   # socks5, one per line
+# .env
+PROXY_PREMIUM_FILE=/absolute/path/to/premium-proxy-list.txt
+```
+
+Premium entries are seeded ahead of the public lists, so per-chat rotation prefers them. The file is gitignored — never commit credentials.
+
 `better-sqlite3` builds natively but `npm ci` handles it via prebuilt binaries for the common Node versions — no `apt`, no `sudo`, no system packages.
+
+## Skills
+
+`skills/` holds markdown knowledge the bot injects only when a turn matches it.
+Each is a directory with a `SKILL.md` frontmatter (`name`, `description` ≤ 60
+chars, `when` patterns). Four ship with the repo:
+
+- **agent-tools** — the 58-tool catalog with blast radius
+- **camoufox-antidetect** — browser blocks, known walls, session rules
+- **context-budget** — where the tokens go and how the cache stays warm
+- **telegram-markdown** — MarkdownV2 escaping rules
+
+Add your own: `mkdir skills/<name>`, write a `SKILL.md`, restart. A skill that
+fails validation is skipped with a warning, never fatal.
 
 ## CLI
 
@@ -61,7 +125,22 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /start               Current model + active session
 /help                Full command reference
 /model [p/m]         Switch model  (e.g. /model openai/gpt-4o)
-/models              List every model
+/model list <p>      Live model list from the provider itself
+/model add <p/m>     Register a new model (admin) — e.g. /model add groq/new-model 128000
+/models              List every registered model
+/agent <task>         Tool-calling agent — shell, files, browser, web search
+                       code tools: execute_python, execute_node, multi_edit,
+                       ast_edit, grep, glob
+                       browser tools: browser_navigate, browser_snapshot
+                       (@eN refs), browser_click, browser_type, browser_read,
+                       browser_search — see docs/agent.md
+                       tunneling: tunnel_open <port> — your local server gets
+                       a clickable URL
+/abort                Cancel the running /agent in this chat
+/todo                 The agent's task list
+/tools                List every tool the agent can call
+/yolo on|off          Auto-approve dangerous tools (skip the keyboard)
+/estop                Emergency stop — cancel everything now
 /temperature <0-2>   Set temperature
 /system <prompt>     Set system prompt
 /reset               Clear history of active session
@@ -71,6 +150,14 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /gitconfig [token]   Link GitHub account (token stored per-user)
 /stats [days]        Usage, tool counts, memory chunks
 /about               Bot info + stats
+/usage               Your token spend (24h / 7d / all time, by model)
+/soul [set|append|clear]  Personality file — becomes the base prompt
+/key set <p> <k> [url] [models]  Use your own API key
+/key chain <p:m,...>      Your own fallback chain
+/lang <code>         Bot UI language: en id es ru ja
+/pin [note]          Pin the replied message into every prompt
+/search <text>       Full-text search across your history
+/export              Download the conversation (.md + .json)
 ```
 
 ### Sessions (`/sessions …`)
@@ -231,6 +318,15 @@ Set `WEBHOOK_ENABLED=true` plus `WEBHOOK_DOMAIN=https://your.host` and the bot s
 
 Each Telegram user gets their own SQLite file at `data/tenants/<user_id>.db` containing messages, sessions, tool audit, long-term memory, and prefs. The global DB keeps user identity, proxies, and usage rollups. On first run after upgrade, legacy `users` config columns are auto-copied into per-user `prefs`.
 
+## Docs
+- [`AGENTS.md`](AGENTS.md) — operator handbook: deploy, config locations, proxy troubleshooting
+- [`SOUL.md`](SOUL.md) — what the bot is, and its boundaries
+- [`prompts/default.md`](prompts/default.md) — the default system prompt, annotated. Live version: `SYSTEM_PROMPT` in `.env`
+- [`docs/telegram-markdown.md`](docs/telegram-markdown.md) — the formatting gotchas that eat replies
+- [`docs/memory-skills-context.md`](docs/memory-skills-context.md) — how memory works here, and how to extend it
+- [`docs/browser.md`](docs/browser.md) — the browser as agent tools: Camoufox, `@eN` refs, engine fallback
+- [`docs/searching-and-execution.md`](docs/searching-and-execution.md) — finding anything, and what can run shell commands
+
 ## Test
 
 ```
@@ -245,3 +341,8 @@ node --test tests/*.test.js
 ## License
 
 MIT.
+
+- Code intelligence: RAG search, AST symbols, dependency graph, dead code, image generation
+- `/gitpull` — one-command self-update + auto-restart
+- `/memory` — durable memory surface
+- oh-my-pi tooling, recoded native: read_pro (files/archives/SQLite/PDF), read_summary, ast_grep structural search, stateful REPL, checkpoint/rewind, context_notes, think, security_scan, GitHub ops, TTS

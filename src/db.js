@@ -25,15 +25,45 @@ import {
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 
 export const db = new Database(config.dbPath);
+
+// --- High-performance tuning (v2) -------------------------------------------
+// WAL: readers never block the writer, and the writer never blocks readers.
+// synchronous=NORMAL is safe under WAL (no corruption on power loss — the WAL
+// is fsynced on checkpoint; only the last transaction may be lost) and cuts
+// commit latency by an order of magnitude vs FULL.
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+// Page cache: negative = kilobytes, so -64000 ≈ 64 MB of hot pages in RAM.
+db.pragma('cache_size = -64000');
+// Memory-mapped reads: the file is mapped into the address space, so a read
+// hits the page cache directly instead of going through a read() syscall.
+db.pragma('mmap_size = 268435456'); // 256 MB
+db.pragma('temp_store = MEMORY');
+// 5 s is generous under WAL; a busy write holds the lock far shorter now.
+db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
+
+/**
+ * Prepared statement cache. db.prepare() parses and plans SQL every call —
+ * on a hot message path that is pure wasted CPU. Compile once, reuse forever.
+ * The map is keyed by the SQL string itself, which is exact and stable.
+ */
+const stmtCache = new Map();
+export function getStatement(sql) {
+  let stmt = stmtCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    stmtCache.set(sql, stmt);
+  }
+  return stmt;
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   user_id        INTEGER PRIMARY KEY,
   username       TEXT,
   first_name     TEXT,
-  last_name      TEXT,
+  last_name     TEXT,
   is_banned      INTEGER NOT NULL DEFAULT 0,
   is_admin       INTEGER NOT NULL DEFAULT 0,
   is_tenant      INTEGER NOT NULL DEFAULT 0,
@@ -59,12 +89,14 @@ CREATE TABLE IF NOT EXISTS proxies (
   scheme    TEXT NOT NULL,
   host      TEXT NOT NULL,
   port      INTEGER NOT NULL,
+  username  TEXT,
+  password  TEXT,
   source    TEXT,
   fails     INTEGER NOT NULL DEFAULT 0,
   ok_count  INTEGER NOT NULL DEFAULT 0,
   last_seen INTEGER,
   created_at INTEGER NOT NULL,
-  UNIQUE(scheme, host, port)
+  UNIQUE(scheme, host, port, username)
 );
 CREATE INDEX IF NOT EXISTS idx_proxies_fail ON proxies(fails, ok_count DESC);
 
@@ -123,7 +155,7 @@ export function getUser(user_id) {
   };
 }
 export function setBanned(user_id, is_banned) {
-  db.prepare('UPDATE users SET is_banned = ?, updated_at = ? WHERE user_id = ?')
+  getStatement('UPDATE users SET is_banned = ?, updated_at = ? WHERE user_id = ?')
     .run(is_banned ? 1 : 0, Date.now(), user_id);
 }
 export function setUserAdmin(user_id, is_admin) {
@@ -134,7 +166,7 @@ export function setUserAdmin(user_id, is_admin) {
 // ---- usage (global rollup) ----
 export function recordUsage({ user_id, provider, model, usage }) {
   if (!usage) return;
-  db.prepare(`
+  getStatement(`
     INSERT INTO usage (user_id, provider, model, prompt_tokens, completion_tokens, total_tokens, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(user_id, provider, model,
@@ -225,12 +257,12 @@ export function allSessions(filterUserId = null) {
 // ---- proxies (unchanged) ----
 export function upsertProxy({ scheme, host, port, source }) {
   const now = Date.now();
-  db.prepare(`
-    INSERT INTO proxies (scheme, host, port, source, last_seen, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(scheme, host, port) DO UPDATE SET
+  getStatement(`
+    INSERT INTO proxies (scheme, host, port, username, password, source, last_seen, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scheme, host, port, username) DO UPDATE SET
       last_seen = excluded.last_seen
-  `).run(scheme, host, port, source || null, now, now);
+  `).run(scheme, host, port, username ?? null, password ?? null, source || null, now, now);
 }
 export function pickRandomProxy() {
   return db.prepare(`
@@ -246,20 +278,20 @@ export function pickProxyForChat(chatId) {
   return db.prepare('SELECT * FROM proxies WHERE id = ?').get(ids[idx].id);
 }
 export function proxyOk(id) {
-  db.prepare('UPDATE proxies SET ok_count = ok_count + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
+  getStatement('UPDATE proxies SET ok_count = ok_count + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
 }
 export function proxyFail(id) {
-  db.prepare('UPDATE proxies SET fails = fails + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
+  getStatement('UPDATE proxies SET fails = fails + 1, last_seen = ? WHERE id = ?').run(Date.now(), id);
 }
 export function proxyStats() {
   return {
-    total: db.prepare('SELECT COUNT(*) AS c FROM proxies').get().c,
-    healthy: db.prepare('SELECT COUNT(*) AS c FROM proxies WHERE fails < 5').get().c,
-    dead: db.prepare('SELECT COUNT(*) AS c FROM proxies WHERE fails >= 5').get().c,
+    total: getStatement('SELECT COUNT(*) AS c FROM proxies').get().c,
+    healthy: getStatement('SELECT COUNT(*) AS c FROM proxies WHERE fails < 5').get().c,
+    dead: getStatement('SELECT COUNT(*) AS c FROM proxies WHERE fails >= 5').get().c,
   };
 }
 export function pruneProxies() {
-  return db.prepare('DELETE FROM proxies WHERE fails >= 20').run().changes;
+  return getStatement('DELETE FROM proxies WHERE fails >= 20').run().changes;
 }
 
 // ---- meta (one-shot migration flag) ----
