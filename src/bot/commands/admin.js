@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import archiver from 'archiver';
 import { providerNames, modelList, allModels, saveProviders } from '../../providers/store.js';
-import { stats, setBanned, db, listSessions } from '../../db.js';
+import { stats, setBanned, db, allMessages, allSessions } from '../../db.js';
 import { config } from '../../config.js';
 
 export async function adminCommand(ctx) {
@@ -114,16 +114,12 @@ async function exportAll(ctx, userArg) {
       : db.prepare('SELECT * FROM users').all();
     zip.append(JSON.stringify(users, null, 2), { name: 'users.json' });
 
-    // sessions
-    const sessions = filterUser
-      ? listSessions(filterUser)
-      : db.prepare('SELECT * FROM sessions').all();
+    // sessions (cross-tenant; user_id stamped on each row)
+    const sessions = allSessions(filterUser);
     zip.append(JSON.stringify(sessions, null, 2), { name: 'sessions.json' });
 
-    // messages
-    const messages = filterUser
-      ? db.prepare('SELECT * FROM messages WHERE user_id = ? ORDER BY id ASC').all(filterUser)
-      : db.prepare('SELECT * FROM messages ORDER BY id ASC').all();
+    // messages (cross-tenant)
+    const messages = allMessages(filterUser);
     zip.append(JSON.stringify(messages, null, 2), { name: 'messages.json' });
 
     // usage

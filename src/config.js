@@ -70,6 +70,36 @@ export const config = {
   historyLimit: int(process.env.HISTORY_LIMIT, 20),
   maxInputChars: int(process.env.MAX_INPUT_CHARS, 8000),
   streaming: bool(process.env.STREAMING, true),
+  tenants: {
+    dir: process.env.TENANT_DIR || path.join(ROOT, 'data', 'tenants'),
+  },
+  webhook: {
+    enabled: bool(process.env.WEBHOOK_ENABLED, false),
+    domain: process.env.WEBHOOK_DOMAIN || '',
+    port: int(process.env.WEBHOOK_PORT, 8443),
+    path: process.env.WEBHOOK_PATH || '/telegram',
+    secret: process.env.WEBHOOK_SECRET || '',
+  },
+  mcp: {
+    configPath: process.env.MCP_CONFIG || path.join(ROOT, 'mcp.json'),
+    autoStart: bool(process.env.MCP_AUTO_START, true),
+  },
+  memory: {
+    autoRemember: bool(process.env.MEMORY_AUTO_REMEMBER, true),
+    maxRecall: int(process.env.MEMORY_MAX_RECALL, 5),
+  },
+  agent: {
+    enabled: bool(process.env.AGENT_ENABLED, true),
+    defaultCwd: process.env.DEFAULT_CWD || null,
+    bashTimeoutMs: int(process.env.AGENT_BASH_TIMEOUT_MS, 30_000),
+    approvalTtlMs: int(process.env.AGENT_APPROVAL_TTL_MS, 5 * 60_000),
+    maxToolIterations: int(process.env.AGENT_MAX_ITERATIONS, 12),
+    maxFileBytes: int(process.env.AGENT_MAX_FILE_BYTES, 200_000),
+    maxBashOutputBytes: int(process.env.AGENT_MAX_BASH_OUTPUT_BYTES, 50_000),
+    maxFileLines: int(process.env.AGENT_MAX_FILE_LINES, 2000),
+    maxUploadBytes: int(process.env.AGENT_MAX_UPLOAD_BYTES, 200_000),
+    sendFileThreshold: int(process.env.AGENT_SEND_FILE_THRESHOLD_LINES, 200),
+  },
   proxy: {
     enabled: bool(process.env.PROXY_ENABLED, true),
     target: int(process.env.PROXY_TARGET, 10000),

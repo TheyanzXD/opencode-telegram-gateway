@@ -1,7 +1,7 @@
 {
   "name": "opencode-gateway-telegram",
-  "version": "1.0.0",
-  "description": "Telegram bot gateway to multiple OpenAI-compatible LLM providers. Streaming, vision, per-user model selection, SQLite history, admin panel, CLI setup wizard.",
+  "version": "1.1.0",
+  "description": "Telegram bot gateway to multi-provider LLMs with a full agent harness: bash + git + github + web search + memory + MCP, rich Telegram UX, webhook mode, per-user SQLite storage.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -11,7 +11,7 @@
     "start": "node src/index.js",
     "setup": "node bin/opencode-gateway.js setup",
     "interactive": "node bin/opencode-gateway.js tui",
-    "test": "node --test tests/",
+    "test": "node --test tests/*.test.js",
     "lint": "node scripts/lint.js",
     "format": "prettier --write ."
   },
@@ -37,9 +37,14 @@
     "bot",
     "openai",
     "llm",
-    "gateway",
-    "router",
-    "multi-provider"
+    "agent",
+    "tools",
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "webhook",
+    "multi-provider",
+    "router"
   ],
   "license": "MIT"
 }

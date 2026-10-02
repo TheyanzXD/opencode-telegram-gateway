@@ -29,7 +29,11 @@ export async function helpCommand(ctx) {
 /temperature <0-2> — set temperature
 /system <prompt> — set system prompt
 /reset — clear history (active session)
-/history — show last messages (active session)${admin}`,
+/history — show last messages (active session)
+/cwd [path] — show or set the agent working directory
+/tools — list agent tools (read/edit/bash/github/git/web/memory)
+/gitconfig [token] — link GitHub account (token stored per-user)
+/stats [days] — usage, tool counts, memory chunks${admin}`,
     { parse_mode: 'Markdown' }
   );
 }

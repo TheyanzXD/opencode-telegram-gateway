@@ -7,10 +7,12 @@ function systemPromptFor(user) {
 
 export function buildMessages(user, currentTurn, sessionId) {
   const sys = { role: 'system', content: systemPromptFor(user) };
-  const history = getHistory(user.user_id, config.historyLimit, sessionId).map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Filter out tool messages — OpenAI requires each tool message to follow an
+  // assistant tool_calls message, which we don't persist. Current-turn tool
+  // messages live in the agent loop's in-memory array.
+  const history = getHistory(user.user_id, config.historyLimit, sessionId)
+    .filter((m) => m.role !== 'tool')
+    .map((m) => ({ role: m.role, content: m.content }));
   return [sys, ...history, { role: 'user', content: currentTurn }];
 }
 

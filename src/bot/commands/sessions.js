@@ -73,11 +73,12 @@ async function deleteCmd(ctx, name) {
 async function renameCmd(ctx, oldName, newName) {
   if (!oldName || !newName) return ctx.reply('Usage: /sessions rename <old> <new>');
   if (!/^[\w\- ]{1,40}$/.test(newName)) return ctx.reply('New name must be 1-40 chars.');
+  const { tenantDb } = await import('../../tenant.js');
   const sess = getSession(ctx.from.id, oldName);
   if (!sess) return ctx.reply(`No session named "${oldName}".`);
   if (getSession(ctx.from.id, newName)) return ctx.reply(`A session named "${newName}" already exists.`);
-  const { db } = await import('../../db.js');
-  db.prepare('UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?').run(newName, Date.now(), sess.id);
+  tenantDb(ctx.from.id).prepare('UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?')
+    .run(newName, Date.now(), sess.id);
   await ctx.reply(`✏️ Renamed \`${oldName}\` → \`${newName}\``, { parse_mode: 'Markdown' });
 }
 

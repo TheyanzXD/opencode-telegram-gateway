@@ -113,8 +113,14 @@ async function* streamChunks(providerName, body, signal, chatId) {
       if (payload === '[DONE]') return;
       try {
         const obj = JSON.parse(payload);
-        const delta = obj.choices?.[0]?.delta?.content ?? obj.choices?.[0]?.text ?? '';
-        if (delta) yield delta;
+        const choice = obj.choices?.[0];
+        if (!choice) continue;
+        const d = choice.delta ?? {};
+        yield {
+          content: d.content ?? '',
+          tool_calls: d.tool_calls ?? null,
+          finish_reason: choice.finish_reason ?? null,
+        };
       } catch {
         // ignore malformed chunk
       }
@@ -129,13 +135,16 @@ export async function chatCompletion(args) {
     temperature: args.temperature,
     max_tokens: args.maxTokens,
   };
+  if (args.tools) body.tools = args.tools;
+  if (args.tool_choice) body.tool_choice = args.tool_choice;
   const t0 = Date.now();
   const data = await requestJson(args.provider, '/chat/completions', body, args.signal, args.chatId);
   const ms = Date.now() - t0;
-  const content = data.choices?.[0]?.message?.content ?? '';
+  const message = data.choices?.[0]?.message ?? {};
+  const content = message.content ?? '';
   const usage = data.usage || null;
   logger.debug({ provider: args.provider, model: args.model, ms, usage }, 'chat complete');
-  return { content, usage, raw: data };
+  return { content, tool_calls: message.tool_calls ?? null, finish_reason: data.choices?.[0]?.finish_reason ?? null, usage, raw: data };
 }
 
 export function streamChatCompletion(args) {
@@ -145,12 +154,15 @@ export function streamChatCompletion(args) {
   if (!getProvider(args.provider)) {
     throw new Error(`Unknown provider: ${args.provider}`);
   }
-  return streamChunks(args.provider, {
+  const body = {
     model: args.model,
     messages: args.messages,
     temperature: args.temperature,
     max_tokens: args.maxTokens,
-  }, args.signal, args.chatId);
+  };
+  if (args.tools) body.tools = args.tools;
+  if (args.tool_choice) body.tool_choice = args.tool_choice;
+  return streamChunks(args.provider, body, args.signal, args.chatId);
 }
 
 export async function listModels(providerName, chatId) {

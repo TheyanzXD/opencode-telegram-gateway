@@ -8,9 +8,15 @@ import {
 } from './commands/user.js';
 import { adminCommand } from './commands/admin.js';
 import { sessionsCommand } from './commands/sessions.js';
+import { cwdCommand } from './commands/cwd.js';
+import { toolsCommand } from './commands/tools.js';
+import { gitconfigCommand } from './commands/gitconfig.js';
+import { statsCommand, statsCallback } from './commands/stats.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
+import { onCallback } from './handlers/callback.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
 import { sweepDead } from '../proxy/pool.js';
+import { loadMcpRegistry, shutdownMcp } from '../mcp/index.js';
 
 let proxyTimer = null;
 async function startProxyMaintenance() {
@@ -53,11 +59,17 @@ export function createBot() {
   bot.command('about', aboutCommand);
   bot.command('admin', adminCommand);
   bot.command('sessions', sessionsCommand);
+  bot.command('cwd', cwdCommand);
+  bot.command('tools', toolsCommand);
+  bot.command('gitconfig', gitconfigCommand);
+  bot.command('stats', statsCommand);
 
   // Fallbacks
   bot.on('message:text', onText);
   bot.on('message:photo', onPhoto);
   bot.on('message:document', onDocument);
+  bot.on('callback_query:data', onCallback);
+  bot.callbackQuery(/^stats:/, statsCallback);
 
   bot.catch((err) => {
     logger.error({ err: err.message, ctx: err.ctx?.update?.update_id }, 'bot error');
@@ -73,26 +85,55 @@ export async function run() {
     process.exit(1);
   }
   const bot = createBot();
-  await bot.api.deleteWebhook({ drop_pending_updates: true });
+
+  // MCP registry startup (non-blocking — failures logged)
+  loadMcpRegistry().catch((err) => logger.warn({ err: err.message }, 'mcp load failed'));
+
   await startProxyMaintenance();
+
+  const webhook = config.webhook;
+  const usingWebhook = webhook.enabled && webhook.domain;
+  if (!usingWebhook) {
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+  } else {
+    try {
+      await bot.api.setWebhook(`${webhook.domain}${webhook.path}`, {
+        secret_token: webhook.secret || undefined,
+        allowed_updates: ['message', 'callback_query', 'edited_message'],
+      });
+      logger.info({ url: `${webhook.domain}${webhook.path}` }, 'webhook configured');
+    } catch (err) {
+      logger.error({ err: err.message }, 'setWebhook failed');
+      process.exit(1);
+    }
+  }
+
   logger.info({
     admins: config.telegram.admins,
     allowed: config.telegram.allowed.length,
     proxy_enabled: config.proxy.enabled,
     admin_channel: config.admin.channelId || '(any)',
+    webhook: usingWebhook,
+    tenant_dir: config.tenants.dir,
   }, 'starting bot');
-  // bot.start() rejects on 401/409 — without await+catch it becomes an
-  // unhandledRejection and the process lingers as a zombie with dead polling.
+
   bot
     .start({
       onStart: (botInfo) => logger.info({ username: botInfo.username }, 'bot online'),
+      webhook: usingWebhook ? {
+        domain: webhook.domain,
+        port: webhook.port,
+        path: webhook.path,
+        secretToken: webhook.secret || undefined,
+      } : undefined,
     })
     .catch((err) => {
-      logger.error({ err: err.message }, 'polling stopped');
+      logger.error({ err: err.message }, usingWebhook ? 'webhook stopped' : 'polling stopped');
       process.exit(1);
     });
 }
 
 export function shutdown() {
   if (proxyTimer) clearInterval(proxyTimer);
+  shutdownMcp().catch(() => {});
 }

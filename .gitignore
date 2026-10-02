@@ -1,6 +1,7 @@
 node_modules/
 .env
 data/
+mcp.json
 *.log
 .DS_Store
 dist/

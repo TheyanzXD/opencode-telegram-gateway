@@ -1,6 +1,6 @@
 # OpenCode Telegram Gateway
 
-A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, conversation sessions, a 10k+ free-proxy pool rotated per chat, admin channel-gating, and full SQLite-backed state. Built with Node.js — **no root required**, runs from a plain user account using only Node's built-in tooling (no native package manager steps; no system services; no `sudo`).
+A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, conversation sessions, a 10k+ free-proxy pool rotated per chat, admin channel-gating, a full **agent harness** (file + bash + GitHub tools), and full SQLite-backed state. Built with Node.js — **no root required**, runs from a plain user account using only Node's built-in tooling (no native package manager steps; no system services; no `sudo`).
 
 ## Features
 
@@ -9,6 +9,13 @@ A multi-provider OpenAI-compatible **Telegram gateway** with streaming, vision, 
 - 💬 **Conversation sessions** — `/sessions new|list|resume|delete|rename|export|active`. Each session scopes its own history in SQLite.
 - 🖼 **Vision** — image attachments forwarded to vision-capable models automatically; override via `VISION_PROVIDER`/`VISION_MODEL`.
 - ⚡ **Streaming** — Telegram edit-in-place as the model types.
+- 🤖 **Agent harness** — tool-calling loop with `read_file`, `write_file`, `edit_file`, `bash_exec`, plus GitHub/git/memory/web-search tools. Live-status updates and inline-keyboard approvals. Toggle with `AGENT_ENABLED`. Details in [`AGENTS.md`](AGENTS.md).
+- 📎 **Document upload** — text/code files dropped in chat are read into the agent (PDF: ponytail).
+- 🧠 **Long-term memory** — `memory_recall`/`memory_remember` tools, FTS5 BM25 ranking.
+- 🔌 **MCP client** — connects to any Model Context Protocol server (`stdio` or `http`) and unions its tools with the hardcoded set. See `mcp.json.example`.
+- 🐙 **GitHub account manager** — `/gitconfig <token>` stores a PAT per user; manage via inline keyboard (profile, repos, gists, revoke). Agent tools `github_list_repos`, `github_view_repo`, `github_create_gist` use the same token.
+- 📊 **Per-user stats** — `/stats [7d|30d|all]` aggregates messages, token usage, tool counts, memory chunks.
+- 🪝 **Webhook mode** — set `WEBHOOK_ENABLED=true` + domain to switch from polling.
 - 🌐 **Proxy pool (10k+)** — auto-fetches public proxies from ~20 sources at startup, rotates per-chat (stable hash), tracks per-proxy health, auto-refreshes every N hours. Up to 39k observed in practice (HTTP/SOCKS4/SOCKS5/HTTPS).
 - 👮 **Admin channel gate** — `/admin` and `/sessions export` only work inside the configured `TELEGRAM_HOME_CHANNEL` (toggle with `ADMIN_REQUIRE_CHANNEL=false`).
 - 📦 **Export to home channel** — `/sessions export` and `/admin export` zip users/sessions/messages/usage/proxies/config and post the zip to your home channel.
@@ -59,6 +66,10 @@ opencode-gateway proxy check <host>:<port> [scheme]   Single-proxy liveness
 /system <prompt>     Set system prompt
 /reset               Clear history of active session
 /history             Show last 10 messages
+/cwd [path]          Show or set agent working directory
+/tools               List agent tools
+/gitconfig [token]   Link GitHub account (token stored per-user)
+/stats [days]        Usage, tool counts, memory chunks
 /about               Bot info + stats
 ```
 
@@ -194,13 +205,42 @@ providers:
 - Pino log redacts any field named `apiKey` automatically.
 - Admin commands require being physically inside the configured channel (DM refused).
 - Proxies are public, free, and used only for outbound LLM API calls. The bot does NOT route user traffic through them.
+- GitHub PATs from `/gitconfig` are stored **plain text** in the bot's per-user tenant SQLite file (`data/tenants/<user_id>.db`) for v1 convenience. Anyone with read access to the tenant directory can read every user's token. Do not expose `data/tenants/` beyond the bot's user account. (Encryption with `BOT_SECRET` is on the roadmap; see ponytails in [`AGENTS.md`](AGENTS.md).)
+- MCP servers are subprocess children (stdio) or remote (HTTP). Subprocess servers can do anything the bot's user account can do on the host. Only configure MCP servers you trust.
+
+## MCP (Model Context Protocol)
+
+`mcp.json.example` ships with two sample servers. The bot launches them, asks each for `tools/list`, and unions their tools with the hardcoded set when sending the `tools[]` payload to the model. Tool names get a `mcp__<server>__<tool>` prefix to avoid collisions.
+
+```json
+{
+  "servers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
+    "github-mcp":  { "url": "http://localhost:3001/mcp" }
+  }
+}
+```
+
+See [`AGENTS.md`](AGENTS.md) for the full explanation, transport details, and 100+ community MCP servers.
+
+## Webhook mode
+
+Set `WEBHOOK_ENABLED=true` plus `WEBHOOK_DOMAIN=https://your.host` and the bot switches to webhook delivery (default). Leave `WEBHOOK_DOMAIN` empty for polling. Set `WEBHOOK_SECRET` to enforce a header token.
+
+## Per-user storage
+
+Each Telegram user gets their own SQLite file at `data/tenants/<user_id>.db` containing messages, sessions, tool audit, long-term memory, and prefs. The global DB keeps user identity, proxies, and usage rollups. On first run after upgrade, legacy `users` config columns are auto-copied into per-user `prefs`.
 
 ## Test
 
 ```
-node --test tests/
+node --test tests/*.test.js
 ```
-3 tests cover config loading, Zod provider validation, and Zod rejection of malformed input.
+10 tests cover config loading, Zod provider validation, Zod rejection of malformed input, zod → OpenAI JSON Schema conversion, sandbox path-escape rejection, bash_exec denial, read_file line capping, per-user DB isolation, memory FTS5 roundtrip, MCP stdio JSON-RPC roundtrip.
+
+## See also
+
+- [`AGENTS.md`](AGENTS.md) — full agent-harness reference: tools, rich-Telegram UX, `/gitconfig`, env vars, ponytails.
 
 ## License
 

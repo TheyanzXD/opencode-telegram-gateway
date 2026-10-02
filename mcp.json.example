@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github-mcp": {
+      "url": "http://localhost:3001/mcp"
+    }
+  }
+}
