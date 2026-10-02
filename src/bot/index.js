@@ -2,6 +2,7 @@ import { Bot, session } from 'grammy';
 import { config, assertValid } from '../config.js';
 import { logger } from '../logger.js';
 import { authMiddleware } from './middleware.js';
+import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import {
   startCommand, helpCommand, modelCommand, modelsCommand,
   temperatureCommand, systemCommand, resetCommand, historyCommand, aboutCommand,

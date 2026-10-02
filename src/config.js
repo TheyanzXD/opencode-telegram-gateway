@@ -97,6 +97,7 @@ export const config = {
     bashTimeoutMs: int(process.env.AGENT_BASH_TIMEOUT_MS, 30_000),
     approvalTtlMs: int(process.env.AGENT_APPROVAL_TTL_MS, 5 * 60_000),
     maxToolIterations: int(process.env.AGENT_MAX_ITERATIONS, 12),
+    rateLimitPerMinute: int(process.env.AGENT_RATE_LIMIT_PER_MINUTE, 30),
     maxFileBytes: int(process.env.AGENT_MAX_FILE_BYTES, 200_000),
     maxBashOutputBytes: int(process.env.AGENT_MAX_BASH_OUTPUT_BYTES, 50_000),
     maxFileLines: int(process.env.AGENT_MAX_FILE_LINES, 2000),
