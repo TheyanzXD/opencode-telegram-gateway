@@ -34,7 +34,9 @@ export async function helpCommand(ctx) {
 /reset — clear history (active session)
 /history — show last messages (active session)
 /cwd [path] — show or set the agent working directory
-/tools — list agent tools (read/edit/bash/github/git/web/memory)
+/tools — list agent tools (read/edit/bash/github/git/web/memory/xerj)
+/xerj [search|def|index|gain|status] — token-efficient code search & indexing engine
+/browse <url> — browse a website and extract clean readable markdown
 /gitconfig [token] — link GitHub account (token stored per-user)
 /stats [days] — usage, tool counts, memory chunks${admin}`,
     { parse_mode: 'Markdown' }

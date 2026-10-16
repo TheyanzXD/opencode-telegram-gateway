@@ -37,6 +37,14 @@ async function fetchText(url, signal) {
   return text.length > MAX_BODY ? text.slice(0, MAX_BODY) + '\n…[truncated]' : text;
 }
 
+import { browseWebsite } from '../web_browse.js';
+
+const browseSchema = z.object({
+  url: z.string().url(),
+  extract_links: z.boolean().optional(),
+  selector: z.string().optional(),
+});
+
 export const searchTools = [
   {
     name: 'web_search',
@@ -73,7 +81,7 @@ export const searchTools = [
   },
   {
     name: 'fetch_url',
-    description: 'Fetch a URL and return raw text/JSON (capped at 20 KB). Read-only.',
+    description: 'Fetch a URL and return clean Markdown or JSON (noise stripped). Read-only.',
     isDangerous: false,
     parameters: {
       type: 'object',
@@ -83,7 +91,28 @@ export const searchTools = [
     },
     schema: fetchSchema,
     async execute({ url }) {
-      return fetchText(url, AbortSignal.timeout(25_000));
+      const res = await browseWebsite({ url });
+      return res.ok ? res.output : `error: ${res.error}`;
+    },
+  },
+  {
+    name: 'browse_website',
+    description: 'Browse a website URL and extract readable Markdown content and optionally outbound links.',
+    isDangerous: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        extract_links: { type: 'boolean' },
+        selector: { type: 'string' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    schema: browseSchema,
+    async execute({ url, extract_links, selector }) {
+      const res = await browseWebsite({ url, extract_links, selector });
+      return res.ok ? res.output : `error: ${res.error}`;
     },
   },
 ];

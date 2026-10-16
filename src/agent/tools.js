@@ -7,9 +7,15 @@ import { safeResolve, defaultCwdFor, SandboxError } from './sandbox.js';
 import { listRepos, getRepo, createGist } from './github.js';
 import { webSearch } from './web_search.js';
 import { recall, remember } from '../memory.js';
+import { browseWebsite } from './web_browse.js';
+import { xerjSearch, xerjDef, xerjAutoindex, xerjStatus, xerjGain } from './xerj.js';
 
 export const readFileSchema = z.object({
   path: z.string().describe('Absolute or cwd-relative file path'),
+  start_line: z.number().int().min(1).optional()
+    .describe('Starting line number to read (1-indexed)'),
+  end_line: z.number().int().min(1).optional()
+    .describe('Ending line number to read (inclusive)'),
   max_lines: z.number().int().min(1).max(config.agent.maxFileLines).optional()
     .describe(`Cap on lines returned (default 400, max ${config.agent.maxFileLines})`),
 });
@@ -99,6 +105,51 @@ export const gitCloneSchema = z.object({
   target_dir: z.string().optional().describe('Target dir under cwd (default: name from url)'),
 });
 
+export const listDirSchema = z.object({
+  path: z.string().optional().describe('Relative path to directory under cwd (default: ".")'),
+  recursive: z.boolean().optional().describe('Recurse into subdirectories (max depth 3, default false)'),
+  max_entries: z.number().int().min(1).max(300).optional().describe('Max files/folders to return (default 100)'),
+});
+
+export const searchFilesSchema = z.object({
+  query: z.string().min(1).describe('Text or pattern to search for'),
+  path: z.string().optional().describe('Subdir under cwd to search in (default: ".")'),
+  regex: z.boolean().optional().describe('Treat query as regex (default false)'),
+  case_sensitive: z.boolean().optional().describe('Case-sensitive search (default false)'),
+  max_results: z.number().int().min(1).max(100).optional().describe('Max matching lines (default 40)'),
+});
+
+export const findFilesSchema = z.object({
+  pattern: z.string().min(1).describe('Pattern to match (e.g. "*.js", "config", "test")'),
+  path: z.string().optional().describe('Subdir under cwd to search in (default: ".")'),
+  max_results: z.number().int().min(1).max(200).optional().describe('Max files to return (default 50)'),
+});
+
+export const browseWebsiteSchema = z.object({
+  url: z.string().url().describe('The HTTP or HTTPS URL to browse'),
+  extract_links: z.boolean().optional().describe('Extract and list outbound links from the page (default false)'),
+  selector: z.string().optional().describe('CSS selector to focus on specific element (e.g. "article", "main", "table")'),
+  max_chars: z.number().int().min(500).max(50000).optional().describe('Max character length (default 15000)'),
+});
+
+export const xerjSearchSchema = z.object({
+  query: z.string().min(1).describe('Code symbol, function, concept, or phrase to search in indexed codebases'),
+  full: z.number().int().optional().describe('Character budget for passage expansion (optional)'),
+});
+
+export const xerjDefSchema = z.object({
+  symbol: z.string().min(1).describe('Symbol name (function, class, variable, method) to find definition and signature for'),
+});
+
+export const xerjAutoindexSchema = z.object({
+  folder: z.string().optional().describe('Folder to index relative to cwd (default: ".")'),
+  fresh: z.boolean().optional().describe('Rebuild index from scratch (default false)'),
+});
+
+export const xerjStatusSchema = z.object({
+  gain: z.boolean().optional().describe('Include token gain and search latency stats (default true)'),
+});
+
 function truncate(str, max) {
   if (str.length <= max) return str;
   return str.slice(0, max) + `\n…(truncated, ${str.length - max} more chars)`;
@@ -107,16 +158,36 @@ function truncate(str, max) {
 async function readFile(args, ctx) {
   const cwd = defaultCwdFor(ctx.user, config);
   const abs = safeResolve(cwd, args.path);
-  const maxLines = args.max_lines ?? 400;
   let buf;
   try { buf = await fs.readFile(abs); }
   catch (err) { return { ok: false, error: `read failed: ${err.message}` }; }
   const text = buf.toString('utf8');
   const lines = text.split('\n');
-  const limited = lines.slice(0, maxLines).join('\n');
-  const out = truncate(limited, config.agent.maxFileBytes);
-  const tag = lines.length > maxLines ? `…(showing ${maxLines}/${lines.length} lines)` : `(${lines.length} lines)`;
-  return { ok: true, output: out + (out.endsWith('\n') ? '' : '\n') + tag, absPath: abs, totalLines: lines.length };
+  const total = lines.length;
+
+  const startLine = args.start_line ?? 1;
+  const maxLines = args.max_lines ?? 400;
+  const endLine = args.end_line ?? Math.min(startLine + maxLines - 1, total);
+
+  const sliceStart = Math.max(0, startLine - 1);
+  const sliceEnd = Math.min(total, endLine);
+
+  let out;
+  let tag;
+  if (!args.start_line && !args.end_line) {
+    const limited = lines.slice(0, maxLines).join('\n');
+    out = truncate(limited, config.agent.maxFileBytes);
+    tag = lines.length > maxLines ? `…(showing ${maxLines}/${lines.length} lines)` : `(${lines.length} lines)`;
+  } else {
+    const formatted = [];
+    for (let i = sliceStart; i < sliceEnd; i++) {
+      formatted.push(`${i + 1} | ${lines[i]}`);
+    }
+    const limited = formatted.join('\n');
+    out = truncate(limited, config.agent.maxFileBytes);
+    tag = `(lines ${startLine}-${sliceEnd} of ${total} total)`;
+  }
+  return { ok: true, output: out + (out.endsWith('\n') ? '' : '\n') + tag, absPath: abs, totalLines: total };
 }
 
 async function writeFile(args, ctx) {
@@ -138,13 +209,34 @@ async function editFile(args, ctx) {
   try { orig = await fs.readFile(abs, 'utf8'); }
   catch (err) { return { ok: false, error: `read failed: ${err.message}` }; }
   const replaceAll = args.replace_all === true;
-  const occurrences = orig.split(args.old_text).length - 1;
-  if (occurrences === 0) return { ok: false, error: 'old_text not found' };
-  if (!replaceAll && occurrences > 1) return { ok: false, error: `old_text matches ${occurrences} times; use replace_all=true or narrow the match` };
-  const newText = replaceAll ? orig.split(args.old_text).join(args.new_text) : orig.replace(args.old_text, args.new_text);
+
+  let target = args.old_text;
+  let occurrences = orig.split(target).length - 1;
+
+  if (occurrences === 0 && (target.includes('\r\n') || orig.includes('\r\n'))) {
+    const normOrig = orig.replace(/\r\n/g, '\n');
+    const normTarget = target.replace(/\r\n/g, '\n');
+    if (normOrig.includes(normTarget)) {
+      orig = normOrig;
+      target = normTarget;
+      occurrences = orig.split(target).length - 1;
+    }
+  }
+
+  if (occurrences === 0) {
+    const totalLines = orig.split('\n').length;
+    return {
+      ok: false,
+      error: `old_text not found in ${args.path} (${totalLines} total lines). Check spacing, line numbers with read_file, or provide more surrounding lines.`,
+    };
+  }
+  if (!replaceAll && occurrences > 1) {
+    return { ok: false, error: `old_text matches ${occurrences} times; use replace_all=true or narrow the match` };
+  }
+  const newText = replaceAll ? orig.split(target).join(args.new_text) : orig.replace(target, args.new_text);
   try {
     await fs.writeFile(abs, newText, 'utf8');
-    const added = args.new_text.length - args.old_text.length;
+    const added = args.new_text.length - target.length;
     return { ok: true, output: `edited ${abs} (${replaceAll ? occurrences : 1} replacement${occurrences === 1 ? '' : 's'}, ${added >= 0 ? '+' : ''}${added} chars)` };
   } catch (err) {
     return { ok: false, error: `write failed: ${err.message}` };
@@ -340,6 +432,142 @@ function shellEscape(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
+// ---- Directory and File search tools ----
+
+async function listDir(args, ctx) {
+  const cwd = defaultCwdFor(ctx.user, config);
+  const abs = safeResolve(cwd, args.path || '.');
+  const maxEntries = args.max_entries ?? 100;
+  const recursive = Boolean(args.recursive);
+
+  const results = [];
+  async function walk(dir, depth = 0) {
+    if (results.length >= maxEntries || depth > 3) return;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      results.push(`[error reading ${path.relative(cwd, dir) || '.'}: ${err.message}]`);
+      return;
+    }
+    entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const ent of entries) {
+      if (results.length >= maxEntries) break;
+      if (ent.name.startsWith('.') && ent.name !== '.env.example') continue;
+      if (ent.name === 'node_modules' || ent.name === '.git') continue;
+
+      const fullPath = path.join(dir, ent.name);
+      const rel = path.relative(cwd, fullPath) || ent.name;
+
+      if (ent.isDirectory()) {
+        results.push(`📁 [DIR]  ${rel}/`);
+        if (recursive && depth < 3) {
+          await walk(fullPath, depth + 1);
+        }
+      } else {
+        try {
+          const st = await fs.stat(fullPath);
+          const sizeKb = (st.size / 1024).toFixed(1);
+          results.push(`📄 [FILE] ${rel} (${sizeKb} KB)`);
+        } catch {
+          results.push(`📄 [FILE] ${rel}`);
+        }
+      }
+    }
+  }
+
+  await walk(abs, 0);
+  const out = results.join('\n');
+  return {
+    ok: true,
+    output: out || '(empty directory)',
+    entriesCount: results.length,
+  };
+}
+
+async function searchFiles(args, ctx) {
+  const cwd = defaultCwdFor(ctx.user, config);
+  const p = safeResolve(cwd, args.path || '.');
+  const flags = [
+    '-rnI',
+    args.case_sensitive ? '' : '-i',
+    args.regex ? '-E' : '-F',
+    '--exclude-dir={node_modules,.git,data,dist,coverage}',
+  ].filter(Boolean).join(' ');
+
+  const cmd = `grep ${flags} ${shellEscape(args.query)} .`;
+  const r = await runBash(cmd, p, 15_000);
+  if (!r.ok && r.exitCode === 1) {
+    return { ok: true, output: `(no matches for "${args.query}")` };
+  }
+  if (!r.ok) return { ok: false, error: r.error || r.output };
+
+  const lines = (r.output || '').split('\n').filter(Boolean);
+  const maxRes = args.max_results ?? 40;
+  const sliced = lines.slice(0, maxRes);
+  const tag = lines.length > maxRes ? `\n…(showing ${maxRes}/${lines.length} matches)` : `\n(${lines.length} matches)`;
+  return { ok: true, output: sliced.join('\n') + tag, totalMatches: lines.length };
+}
+
+async function findFiles(args, ctx) {
+  const cwd = defaultCwdFor(ctx.user, config);
+  const p = safeResolve(cwd, args.path || '.');
+  const pat = args.pattern.includes('*') ? args.pattern : `*${args.pattern}*`;
+  const cmd = `find . -not -path '*/.*' -not -path './node_modules*' -not -path './data*' -name ${shellEscape(pat)} | sort`;
+  const r = await runBash(cmd, p, 10_000);
+  if (!r.ok) return { ok: false, error: r.error || r.output };
+  const lines = (r.output || '').split('\n').filter(Boolean).map((l) => l.replace(/^\.\//, ''));
+  if (!lines.length) return { ok: true, output: `(no files matching "${args.pattern}")` };
+  const maxRes = args.max_results ?? 50;
+  const sliced = lines.slice(0, maxRes);
+  const tag = lines.length > maxRes ? `\n…(showing ${maxRes}/${lines.length} files)` : `\n(${lines.length} files)`;
+  return { ok: true, output: sliced.join('\n') + tag, totalFiles: lines.length };
+}
+
+async function browseWebsiteTool(args) {
+  const r = await browseWebsite(args);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, output: r.output, title: r.title, url: r.url };
+}
+
+async function xerjSearchTool(args) {
+  const r = await xerjSearch(args.query, { full: args.full });
+  return { ok: r.ok, output: r.output || r.error, error: r.ok ? undefined : r.error };
+}
+
+async function xerjDefTool(args) {
+  const r = await xerjDef(args.symbol);
+  return { ok: r.ok, output: r.output || r.error, error: r.ok ? undefined : r.error };
+}
+
+async function xerjAutoindexTool(args, ctx) {
+  const cwd = defaultCwdFor(ctx.user, config);
+  const folder = args.folder ? safeResolve(cwd, args.folder) : cwd;
+  const r = await xerjAutoindex(folder, { fresh: args.fresh });
+  return { ok: r.ok, output: r.output || r.error, error: r.ok ? undefined : r.error };
+}
+
+async function xerjStatusTool(args) {
+  const st = await xerjStatus();
+  if (!st.ok) return { ok: false, error: st.error || 'xerj offline' };
+  let out = `XERJ Node: ${st.cluster_name} (${st.status})\nURL: ${st.url}\nIndexed Indices: ${st.indices?.length || 0}\n`;
+  if (st.indices?.length) {
+    out += st.indices.map((idx) => `  - ${idx.index}: ${idx.docs_count} docs (${idx.store_size})`).join('\n');
+  }
+  if (args.gain !== false) {
+    const gain = await xerjGain();
+    if (gain.ok && gain.output) {
+      out += `\n\n${gain.output}`;
+    }
+  }
+  return { ok: true, output: out };
+}
+
 // Register all tools
 tools.push(
   { name: 'github_list_repos', description: 'List the current user\'s GitHub repos. Requires /gitconfig token.', schema: githubListReposSchema, run: ghListRepos },
@@ -354,4 +582,12 @@ tools.push(
   { name: 'git_commit', description: 'git add -A + git commit (requires inline approval).', schema: gitCommitSchema, run: gitCommit },
   { name: 'git_branch', description: 'git branch list/create/delete/checkout.', schema: gitBranchSchema, run: gitBranch },
   { name: 'git_clone', description: 'git clone a URL into cwd (requires approval).', schema: gitCloneSchema, run: gitClone },
+  { name: 'list_dir', description: 'List files and directories in your cwd or given path with sizes and types.', schema: listDirSchema, run: listDir },
+  { name: 'search_files', description: 'Search for text or regex pattern across workspace files (grep). Returns path:line matches.', schema: searchFilesSchema, run: searchFiles },
+  { name: 'find_files', description: 'Find files matching a name or wildcard pattern (e.g. "*.js", "config").', schema: findFilesSchema, run: findFiles },
+  { name: 'browse_website', description: 'Browse a website URL and extract clean Markdown content, tables, and optional outbound links.', schema: browseWebsiteSchema, run: browseWebsiteTool },
+  { name: 'xerj_search', description: 'Token-efficient code and passage search across indexed codebases using XERJ (2.7x-40x token reduction).', schema: xerjSearchSchema, run: xerjSearchTool },
+  { name: 'xerj_def', description: 'Go-to-definition lookup for code symbols (functions, classes, methods) with signature and file:line citations.', schema: xerjDefSchema, run: xerjDefTool },
+  { name: 'xerj_autoindex', description: 'Zero-config autoindexing of a folder or repository into XERJ search engine.', schema: xerjAutoindexSchema, run: xerjAutoindexTool },
+  { name: 'xerj_status', description: 'Check XERJ search cluster health, indexed documents count, and measured token savings gain.', schema: xerjStatusSchema, run: xerjStatusTool },
 );

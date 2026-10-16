@@ -19,8 +19,25 @@
 // them with `camou install`; camoufox-js resolves the same cache once its
 // version.json is in the shape it expects (see ensureCamoufoxEnv).
 
-import { launchOptions } from 'camoufox-js';
-import { firefox } from 'playwright-core';
+let camoufoxModule = null;
+let playwrightModule = null;
+
+async function loadBrowserModules() {
+  if (process.platform === 'android') {
+    throw new Error('Playwright/Camoufox is not supported on Android/Termux. Use browse_website or web_search.');
+  }
+  if (!camoufoxModule) {
+    camoufoxModule = await import('camoufox-js');
+  }
+  if (!playwrightModule) {
+    playwrightModule = await import('playwright-core');
+  }
+  return {
+    launchOptions: camoufoxModule.launchOptions,
+    firefox: playwrightModule.firefox,
+  };
+}
+
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger.js';
@@ -37,6 +54,7 @@ const CAMOUFOX_CACHE = '/root/.cache/camoufox';
  * @returns {string|null} the browser dir, or null if Camoufox is not installed
  */
 export function ensureCamoufoxEnv() {
+  if (process.platform === 'android') return null;
   const dir = process.env.CAMOUFOX_INSTALL_DIR || null;
   if (!dir) return null;
   if (!existsSync(path.join(dir, 'camoufox-bin'))) return null;
@@ -67,6 +85,8 @@ export async function getPage(chatId) {
 
   const dir = ensureCamoufoxEnv();
   if (!dir) throw new Error('Camoufox not installed — run `npx camou install` first');
+
+  const { launchOptions, firefox } = await loadBrowserModules();
 
   // os: 'windows' generates a real Windows/Firefox fingerprint. ff_version
   // bypasses camoufox-js's version probe (i_know_what_im_doing silences the

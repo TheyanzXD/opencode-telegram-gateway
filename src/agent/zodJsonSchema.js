@@ -21,6 +21,8 @@ function leaf(s) {
     case 'ZodNumber': return { type: 'number', description: t._def.description };
     case 'ZodBoolean': return { type: 'boolean', description: t._def.description };
     case 'ZodEnum':    return { type: 'string', enum: [...t._def.values], description: t._def.description };
+    case 'ZodArray':   return { type: 'array', items: leaf(t._def.type), description: t._def.description };
+    case 'ZodObject':  return schemaToJsonSchema(t);
     default: return { type: 'string', description: 'unsupported' };
   }
 }

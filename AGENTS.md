@@ -30,6 +30,8 @@ src/
     tools.js                     static tool registry (name + zod schema + run)
     github.js                    undici GitHub REST client (no SDK)
     web_search.js                DuckDuckGo HTML + IA fallback
+    web_browse.js                HTML to clean Markdown + link discovery (cheerio)
+    xerj.js                      XERJ daemon & client integration (search, def, index)
     zodJsonSchema.js              zod → OpenAI function.parameters (no new dep)
     loop.js                      runAgent(): streaming + tool loop + audit + send-as-doc
     approval.js                  inline approval promise map (auto-deny)
@@ -131,7 +133,7 @@ JSON-RPC 2.0. Stdio transport spawns the command, reads newline-delimited JSON f
 
 ## Verification checklist
 
-- `node --test tests/*.test.js` → 10/10 green.
+- `node --test tests/*.test.js` → 15/15 green.
 - `node bin/opencode-gateway.js doctor` → no fatal (401 expected if API key invalid).
 - `node src/bot/index.js` (or `npm start`) → logs `bot online`, `mcp server connected` (if configured), `database ready`.
 - Manual Telegram: `/stats`, `/cwd`, `/tools`, drop a `.txt`, `read /etc/hostname` (cwd-sandboxed).

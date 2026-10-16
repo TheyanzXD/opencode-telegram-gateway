@@ -6,6 +6,14 @@
     },
     "github-mcp": {
       "url": "http://localhost:3001/mcp"
+    },
+    "xerj": {
+      "command": "xerj",
+      "args": ["mcp"],
+      "env": {
+        "XERJ_URL": "http://localhost:9200",
+        "XERJ_DISABLE_FEEDBACK": "true"
+      }
     }
   }
 }

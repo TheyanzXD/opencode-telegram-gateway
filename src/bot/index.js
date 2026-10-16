@@ -13,6 +13,8 @@ import { cwdCommand } from './commands/cwd.js';
 import { toolsCommand } from './commands/tools.js';
 import { gitconfigCommand } from './commands/gitconfig.js';
 import { statsCommand, statsCallback } from './commands/stats.js';
+import { xerjCommand } from './commands/xerj.js';
+import { browseCommand } from './commands/browse.js';
 import { onText, onPhoto, onDocument } from './handlers/message.js';
 import { onCallback } from './handlers/callback.js';
 import { refresh as proxyRefresh } from '../proxy/fetcher.js';
@@ -83,6 +85,8 @@ export function createBot() {
   bot.command('tools', toolsCommand);
   bot.command('gitconfig', gitconfigCommand);
   bot.command('stats', statsCommand);
+  bot.command('xerj', xerjCommand);
+  bot.command('browse', browseCommand);
 
   // Fallbacks
   bot.on('message:text', onText);
